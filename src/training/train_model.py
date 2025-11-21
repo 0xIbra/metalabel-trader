@@ -116,13 +116,27 @@ def train_model(data_path="data/raw/eurusd_m1.csv", model_path="src/oracle/model
 
     # Train XGBoost
     logger.info("Training XGBoost model...")
+
+    # Calculate class weights to handle imbalance
+    class_counts = y_train.value_counts()
+    scale_pos_weight = class_counts[0] / class_counts[1]
+
+    logger.info(f"Class imbalance ratio: {scale_pos_weight:.2f}")
+    logger.info("Using scale_pos_weight to balance classes")
+
     model = xgb.XGBClassifier(
         objective='binary:logistic',
-        n_estimators=100,
-        learning_rate=0.1,
-        max_depth=3,
+        n_estimators=200,  # Increased from 100
+        learning_rate=0.05,  # Lowered for better generalization
+        max_depth=4,  # Increased from 3 for more complexity
+        min_child_weight=3,  # Add regularization
+        gamma=0.1,  # Add regularization
+        subsample=0.8,  # Prevent overfitting
+        colsample_bytree=0.8,  # Prevent overfitting
+        scale_pos_weight=scale_pos_weight,  # Handle class imbalance
         eval_metric='logloss',
-        use_label_encoder=False
+        use_label_encoder=False,
+        random_state=42
     )
 
     model.fit(X_train, y_train)

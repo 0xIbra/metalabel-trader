@@ -60,7 +60,9 @@ class Oracle:
 
         logger.info(f"Inference Probability: {prob:.4f}")
 
-        if prob > 0.85:
+        # Lowered threshold from 0.85 to 0.65 for better signal generation
+        if prob > 0.65:
             return "EXECUTE"
         else:
             return "NO_ACTION"
+
