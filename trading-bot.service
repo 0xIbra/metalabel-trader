@@ -1,6 +1,8 @@
 [Unit]
 Description=MetaLabel Trading Bot
 After=network.target
+StartLimitBurst=5
+StartLimitIntervalSec=600
 
 [Service]
 Type=simple
@@ -13,10 +15,6 @@ Restart=always
 RestartSec=30
 StandardOutput=append:/home/ubuntu/metalabel-trader/logs/bot.log
 StandardError=append:/home/ubuntu/metalabel-trader/logs/bot-error.log
-
-# Restart policy
-StartLimitBurst=5
-StartLimitIntervalSec=600
 
 [Install]
 WantedBy=multi-user.target
