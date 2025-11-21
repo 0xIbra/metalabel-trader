@@ -213,7 +213,7 @@ class LiveTradingBot:
 
         except Exception as e:
             logger.error(f"❌ MetaApi connection failed: {e}")
-            await notify_error(str(e), "Check MetaApi credentials")
+            notify_error(str(e), "Check MetaApi credentials")
             raise
 
     def compute_features(self, symbol):
@@ -330,7 +330,7 @@ class LiveTradingBot:
 
                 if current_balance < 100:  # Minimum balance check
                     logger.error(f"Insufficient balance: ${current_balance:.2f}")
-                    await notify_error(f"Balance too low: ${current_balance:.2f}", "Add funds to account")
+                    notify_error(f"Balance too low: ${current_balance:.2f}", "Add funds to account")
                     return
             except Exception as e:
                 logger.error(f"Failed to get account info: {e}")
@@ -392,7 +392,7 @@ class LiveTradingBot:
                 self.save_state()
 
                 # Notify
-                await notify_trade_entry(
+                notify_trade_entry(
                     symbol, 'BUY', current_price, tp_price, sl_price,
                     lot_size, risk_amount, confidence * 100
                 )
@@ -401,7 +401,7 @@ class LiveTradingBot:
 
             except Exception as e:
                 logger.error(f"Failed to open {symbol}: {e}")
-                await notify_error(f"Failed to open {symbol}", str(e))
+                notify_error(f"Failed to open {symbol}", str(e))
 
     async def check_positions(self, connection):
         """Check and manage open positions"""
@@ -465,7 +465,7 @@ class LiveTradingBot:
             balance = account_info['balance']
 
             # Notify
-            await notify_trade_exit(
+            notify_trade_exit(
                 symbol, exit_price, pnl, pips, reason, hold_time, balance
             )
 
@@ -515,7 +515,7 @@ class LiveTradingBot:
 
                 # Send startup notification
                 account_info = await connection.get_account_information()
-                await notify_startup(SYMBOLS, CONFIDENCE_THRESHOLD, account_info['balance'])
+                notify_startup(SYMBOLS, CONFIDENCE_THRESHOLD, account_info['balance'])
 
                 logger.info("🚀 Bot started. Monitoring signals...")
 
@@ -526,7 +526,7 @@ class LiveTradingBot:
                         logger.info(f"✅ Subscribed to {symbol} market data")
                     except Exception as e:
                         logger.error(f"❌ Failed to subscribe to {symbol}: {e}")
-                        await notify_error(f"Subscription failed for {symbol}", str(e))
+                        notify_error(f"Subscription failed for {symbol}", str(e))
                         raise
 
                 # Reset retry count after successful connection
@@ -555,7 +555,7 @@ class LiveTradingBot:
                         if (datetime.utcnow() - last_status).total_seconds() >= 3600:
                             account_info = await connection.get_account_information()
                             win_rate = len([t for t in self.trades_today if t['pnl'] > 0]) / len(self.trades_today) * 100 if self.trades_today else 0
-                            await notify_status(
+                            notify_status(
                                 account_info['balance'],
                                 len(self.open_positions),
                                 len(self.trades_today),
@@ -575,7 +575,7 @@ class LiveTradingBot:
                         # Handle connection errors during main loop
                         if 'connection' in str(e).lower() or 'timeout' in str(e).lower():
                             logger.error(f"Connection error in main loop: {e}")
-                            await notify_error("Connection lost", "Attempting to reconnect...")
+                            notify_error("Connection lost", "Attempting to reconnect...")
                             break  # Break inner loop to trigger reconnection
                         else:
                             logger.error(f"Error in main loop: {e}")
@@ -583,7 +583,7 @@ class LiveTradingBot:
 
             except KeyboardInterrupt:
                 logger.info("⚠️ Keyboard interrupt received")
-                await notify_shutdown("Manual stop")
+                notify_shutdown("Manual stop")
                 break
 
             except Exception as e:
@@ -593,11 +593,11 @@ class LiveTradingBot:
                 if retry_count < max_retries:
                     wait_time = retry_count * 30  # Exponential backoff: 30s, 60s, 90s
                     logger.info(f"Reconnecting in {wait_time}s... (Attempt {retry_count}/{max_retries})")
-                    await notify_error(str(e), f"Reconnecting in {wait_time}s")
+                    notify_error(str(e), f"Reconnecting in {wait_time}s")
                     await asyncio.sleep(wait_time)
                 else:
                     logger.error("Max retries reached. Stopping bot.")
-                    await notify_error("Max reconnection attempts reached", "Bot stopped")
+                    notify_error("Max reconnection attempts reached", "Bot stopped")
                     break
 
         # Cleanup
