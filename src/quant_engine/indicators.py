@@ -212,3 +212,81 @@ def calculate_volume_delta(volumes):
             result[i] = 0.0
 
     return result
+
+@jit(nopython=True)
+def calculate_bollinger_bands(prices, window=20, num_std=2):
+    """
+    Calculate Bollinger Bands (Upper, Middle, Lower) and Bandwidth.
+    Returns: (upper, middle, lower, bandwidth)
+    """
+    n = len(prices)
+    upper = np.zeros(n)
+    middle = np.zeros(n)
+    lower = np.zeros(n)
+    bandwidth = np.zeros(n)
+
+    if n < window:
+        return upper, middle, lower, bandwidth
+
+    for i in range(window, n):
+        slice_arr = prices[i-window+1:i+1]
+        mean = np.mean(slice_arr)
+        std = np.std(slice_arr)
+
+        middle[i] = mean
+        upper[i] = mean + (num_std * std)
+        lower[i] = mean - (num_std * std)
+
+        if middle[i] != 0:
+            bandwidth[i] = (upper[i] - lower[i]) / middle[i]
+
+    return upper, middle, lower, bandwidth
+
+@jit(nopython=True)
+def calculate_atr(high, low, close, window=14):
+    """
+    Calculate Average True Range (ATR).
+    """
+    n = len(close)
+    tr = np.zeros(n)
+    atr = np.zeros(n)
+
+    # Calculate TR
+    for i in range(1, n):
+        h_l = high[i] - low[i]
+        h_pc = abs(high[i] - close[i-1])
+        l_pc = abs(low[i] - close[i-1])
+        tr[i] = max(h_l, max(h_pc, l_pc))
+
+    # First ATR is simple average of TR
+    if n > window:
+        atr[window] = np.mean(tr[1:window+1])
+
+        # Subsequent ATR: (Prior ATR * (n-1) + Current TR) / n
+        for i in range(window + 1, n):
+            atr[i] = (atr[i-1] * (window - 1) + tr[i]) / window
+
+    return atr
+
+@jit(nopython=True)
+def calculate_pivot_points(high, low, close):
+    """
+    Calculate Standard Pivot Points (P, R1, S1).
+    Note: This is a rolling calculation based on previous bar,
+    typically used for Daily/Weekly pivots.
+    For H4, we treat the previous H4 bar as the reference for simplicity
+    in this rolling context, or we'd need higher timeframe data.
+    Here we calculate Pivot based on previous bar: (H+L+C)/3
+    """
+    n = len(close)
+    pivot = np.zeros(n)
+    r1 = np.zeros(n)
+    s1 = np.zeros(n)
+
+    for i in range(1, n):
+        p = (high[i-1] + low[i-1] + close[i-1]) / 3
+        pivot[i] = p
+        r1[i] = (2 * p) - low[i-1]
+        s1[i] = (2 * p) - high[i-1]
+
+    return pivot, r1, s1

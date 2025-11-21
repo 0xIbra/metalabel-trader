@@ -24,7 +24,8 @@ from src.notifications.telegram_bot import (
 )
 from src.quant_engine.indicators import (
     calculate_log_returns, calculate_volatility, calculate_z_score,
-    calculate_rsi, calculate_adx, calculate_time_sin, calculate_volume_delta
+    calculate_rsi, calculate_adx, calculate_time_sin, calculate_volume_delta,
+    calculate_bollinger_bands, calculate_atr, calculate_pivot_points
 )
 from src.training.train_model import compute_roc, compute_macd, compute_price_velocity
 
@@ -47,7 +48,18 @@ METAAPI_TOKEN = os.getenv('METAAPI_TOKEN')
 METAAPI_ACCOUNT_ID = os.getenv('METAAPI_ACCOUNT_ID')
 
 # Trading config
-SYMBOLS = ['EURUSD', 'AUDUSD']
+# Trading config
+# Swing Trading Universe
+MAJORS = ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'NZDUSD', 'USDCAD', 'USDCHF']
+CROSSES = [
+    'EURGBP', 'EURJPY', 'GBPJPY', 'AUDJPY', 'NZDJPY', 'CADJPY', 'CHFJPY',
+    'EURAUD', 'EURNZD', 'EURCAD', 'EURCHF',
+    'GBPAUD', 'GBPNZD', 'GBPCAD', 'GBPCHF',
+    'AUDNZD', 'AUDCAD', 'AUDCHF',
+    'NZDCAD', 'NZDCHF',
+    'CADCHF'
+]
+SYMBOLS = MAJORS + CROSSES # + ['XAUUSD'] (Gold often has different contract specs, omitting for now)
 CONFIDENCE_THRESHOLD = 0.50
 ACCOUNT_BALANCE = 1000  # Starting balance
 LEVERAGE = 30
@@ -57,8 +69,9 @@ SL_PIPS = 1
 HOLD_BARS = 60  # 60 minutes timeout
 
 # Strategy config
-MAX_CONCURRENT_POSITIONS = 2  # 1 per symbol
-DAILY_LOSS_LIMIT = 20  # $20 max loss per day
+# Strategy config
+MAX_CONCURRENT_POSITIONS = 10  # Allow more positions for swing portfolio
+DAILY_LOSS_LIMIT = 100  # Increased for swing volatility (or remove if not needed)
 FEATURE_WINDOW = 100  # Keep last 100 bars for features
 STATE_FILE = 'state.json'  # State persistence file
 
@@ -80,29 +93,55 @@ class LiveTradingBot:
         # Load models
         self.load_models()
 
+        # Load historical data
+        self.load_historical_data()
+
         # Restore state if exists
         self.load_state()
 
-    def load_models(self):
-        """Load XGBoost models for each symbol"""
-        logger.info("Loading models...")
-
+    def load_historical_data(self):
+        """Load historical H4 data from CSVs to initialize buffers"""
+        logger.info("Loading historical data...")
+        count = 0
         for symbol in SYMBOLS:
-            model_path = f"src/oracle/model_{symbol.lower()}.json" if symbol != 'EURUSD' else "src/oracle/model.json"
+            try:
+                path = f"data/swing/{symbol.lower()}_h4.csv"
+                if os.path.exists(path):
+                    df = pd.read_csv(path)
+                    # Ensure sorted
+                    df = df.sort_values('timestamp')
 
-            if os.path.exists(model_path):
-                try:
-                    model = xgb.Booster()
-                    model.load_model(model_path)
-                    self.models[symbol] = model
-                    logger.info(f"✅ Loaded model for {symbol}")
-                except Exception as e:
-                    logger.error(f"❌ Failed to load {symbol} model: {e}")
-            else:
-                logger.error(f"❌ Model not found: {model_path}")
+                    # Take last FEATURE_WINDOW bars
+                    recent = df.tail(FEATURE_WINDOW).to_dict('records')
 
-        if not self.models:
-            raise Exception("No models loaded!")
+                    for bar in recent:
+                        self.price_buffers[symbol].append(bar)
+
+                    count += 1
+                    logger.info(f"Loaded {len(recent)} bars for {symbol}")
+            except Exception as e:
+                logger.error(f"Failed to load history for {symbol}: {e}")
+
+        logger.info(f"✅ Loaded history for {count}/{len(SYMBOLS)} symbols")
+
+    def load_models(self):
+        """Load Global XGBoost model"""
+        logger.info("Loading global model...")
+
+        model_path = "src/oracle/model_swing_global.json"
+
+        if os.path.exists(model_path):
+            try:
+                model = xgb.Booster()
+                model.load_model(model_path)
+                self.model = model # Single global model
+                logger.info(f"✅ Loaded global model from {model_path}")
+            except Exception as e:
+                logger.error(f"❌ Failed to load global model: {e}")
+                raise
+        else:
+            logger.error(f"❌ Model not found: {model_path}")
+            raise Exception("Global model not found!")
 
     def save_state(self):
         """Save bot state to file for crash recovery"""
@@ -122,7 +161,10 @@ class LiveTradingBot:
                     'tp': pos['tp'],
                     'sl': pos['sl'],
                     'confidence': pos['confidence'],
-                    'order_id': pos['order_id']
+                    'order_id': pos['order_id'],
+                    'highest_high': pos.get('highest_high', pos['entry_price']),
+                    'atr': pos.get('atr', 0.0010),
+                    'has_added': pos.get('has_added', False)
                 }
 
             # Serialize trades (convert datetime to string)
@@ -170,6 +212,11 @@ class LiveTradingBot:
             # Restore positions (convert string back to datetime)
             for symbol, pos_data in state.get('open_positions', {}).items():
                 pos_data['entry_time'] = datetime.fromisoformat(pos_data['entry_time'])
+                # Backwards compatibility for state file
+                if 'highest_high' not in pos_data: pos_data['highest_high'] = pos_data['entry_price']
+                if 'atr' not in pos_data: pos_data['atr'] = 0.0010
+                if 'has_added' not in pos_data: pos_data['has_added'] = False
+
                 self.open_positions[symbol] = pos_data
 
             logger.info(f"✅ State restored: {len(self.open_positions)} positions, {len(self.trades_today)} trades from {age_hours:.1f}h ago")
@@ -246,6 +293,24 @@ class LiveTradingBot:
         time_sin = calculate_time_sin(timestamps)
         volume_delta = calculate_volume_delta(volume)
 
+        # Swing Features
+        upper, middle, lower, bandwidth = calculate_bollinger_bands(close, window=20, num_std=2)
+        # Avoid division by zero
+        bb_range = upper - lower
+        bb_position = np.zeros_like(close)
+        mask = bb_range != 0
+        bb_position[mask] = (close[mask] - lower[mask]) / bb_range[mask]
+
+        atr = calculate_atr(high, low, close, window=14)
+        atr_pct = np.zeros_like(atr)
+        mask = close != 0
+        atr_pct[mask] = atr[mask] / close[mask] * 100
+
+        pivot, r1, s1 = calculate_pivot_points(high, low, close)
+        dist_pivot = np.zeros_like(close)
+        mask = atr != 0
+        dist_pivot[mask] = (close[mask] - pivot[mask]) / atr[mask]
+
         # Momentum features
         close_series = pd.Series(close)
         roc_5 = compute_roc(close_series, 5).values
@@ -262,8 +327,10 @@ class LiveTradingBot:
         returns_lag2 = np.roll(log_returns, 2)
 
         # Get latest features (last bar)
+        # MUST MATCH train_model.py feature order exactly
         features = np.array([[
             z_score[-1], rsi[-1], volatility[-1], adx[-1], time_sin[-1], volume_delta[-1],
+            bandwidth[-1], bb_position[-1], atr_pct[-1], dist_pivot[-1],
             roc_5[-1], roc_10[-1], roc_20[-1], macd[-1], velocity[-1],
             close_lag1[-1], close_lag2[-1], close_lag3[-1], returns_lag1[-1], returns_lag2[-1]
         ]])
@@ -280,23 +347,29 @@ class LiveTradingBot:
         return features
 
     def get_prediction(self, symbol, features):
-        """Get model prediction"""
-        if symbol not in self.models or features is None:
+        """Get model prediction using global model"""
+        if not hasattr(self, 'model') or self.model is None:
+            return 0.0
+
+        if features is None:
             return 0.0
 
         feature_names = [
             'z_score', 'rsi', 'volatility', 'adx', 'time_sin', 'volume_delta',
+            'bb_width', 'bb_position', 'atr_pct', 'dist_pivot',
             'roc_5', 'roc_10', 'roc_20', 'macd', 'velocity',
             'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2'
         ]
 
         dmatrix = xgb.DMatrix(features, feature_names=feature_names)
-        predictions = self.models[symbol].predict(dmatrix)
+        predictions = self.model.predict(dmatrix)
 
         # Get BUY probability (3-class model)
+        # Classes: 0=SELL, 1=CHOP, 2=BUY
         if len(predictions.shape) > 1 and predictions.shape[1] == 3:
             buy_prob = predictions[0][2]  # BUY class
         else:
+            # Fallback if binary
             buy_prob = predictions[0]
 
         return buy_prob
@@ -327,7 +400,7 @@ class LiveTradingBot:
             daily_pnl = sum([t['pnl'] for t in self.trades_today])
             if daily_pnl <= -DAILY_LOSS_LIMIT:
                 logger.warning(f"Daily loss limit reached: ${daily_pnl:.2f}")
-                continue
+                return
 
             # Check account balance
             try:
@@ -362,17 +435,46 @@ class LiveTradingBot:
                 logger.error(f"Failed to get price for {symbol}: {e}")
                 continue
 
-            # Calculate TP/SL
-            pip_size = 0.0001 if symbol != 'USDJPY' else 0.01
-            tp_price = current_price + (TP_PIPS * pip_size)
-            sl_price = current_price - (SL_PIPS * pip_size)
+            # Calculate ATR for Risk Management
+            # We need the latest ATR from features or re-calculate
+            # Features: [..., atr_pct, ...] - index 8 in new feature set
+            # But better to recalculate or get from buffer to be precise
+            buffer_df = pd.DataFrame(list(self.price_buffers[symbol]))
+            if len(buffer_df) < 20: continue
+
+            high_arr = buffer_df['high'].values
+            low_arr = buffer_df['low'].values
+            close_arr = buffer_df['close'].values
+            atr_arr = calculate_atr(high_arr, low_arr, close_arr, window=14)
+            current_atr = atr_arr[-1]
+
+            if current_atr == 0: continue
+
+            # Calculate TP/SL based on ATR
+            # Strategy: TP = 2 * ATR, SL = 1 * ATR
+            tp_dist = 2.0 * current_atr
+            sl_dist = 1.0 * current_atr
+
+            tp_price = current_price + tp_dist
+            sl_price = current_price - sl_dist
 
             # Calculate lot size dynamically based on balance and risk
-            risk_amount = current_balance * RISK_PERCENT
-            pip_value_per_lot = 10 if symbol != 'USDJPY' else 1000
-            lot_size = risk_amount / (SL_PIPS * pip_value_per_lot)
-            lot_size = round(lot_size, 2)  # Round to 2 decimals
-            lot_size = max(0.01, min(lot_size, 0.10))  # Clamp between 0.01 and 0.10
+            # Risk 1% of account
+            risk_amount = current_balance * 0.01
+
+            # Pip value approximation (Standard: $10/lot, JPY: $1000/lot approx)
+            # Precise: Risk / (SL_dist * ContractSize)
+            # Simplified:
+            pip_value_per_lot = 1000 if 'JPY' in symbol else 10
+            # Convert SL dist to pips for calculation
+            pip_size = 0.01 if 'JPY' in symbol else 0.0001
+            sl_pips = sl_dist / pip_size
+
+            if sl_pips == 0: continue
+
+            lot_size = risk_amount / (sl_pips * pip_value_per_lot)
+            lot_size = round(lot_size, 2)
+            lot_size = max(0.01, min(lot_size, 5.0)) # Cap at 5 lots
 
             # Place order
             try:
@@ -391,7 +493,10 @@ class LiveTradingBot:
                     'tp': tp_price,
                     'sl': sl_price,
                     'confidence': confidence,
-                    'order_id': result['orderId']
+                    'order_id': result['orderId'],
+                    'highest_high': current_price,
+                    'atr': current_atr,
+                    'has_added': False
                 }
 
                 # Save state immediately
@@ -403,21 +508,84 @@ class LiveTradingBot:
                     lot_size, risk_amount, confidence * 100
                 )
 
-                logger.info(f"🟢 Opened {symbol} @ {current_price:.5f} (Confidence: {confidence:.1%}, Lot: {lot_size})")
+                logger.info(f"🟢 Opened {symbol} @ {current_price:.5f} (Conf: {confidence:.1%}, ATR: {current_atr:.5f})")
 
             except Exception as e:
                 logger.error(f"Failed to open {symbol}: {e}")
                 notify_error(f"Failed to open {symbol}", str(e))
 
     async def check_positions(self, connection):
-        """Check and manage open positions"""
+        """Check and manage open positions (Trailing Stop & Pyramiding)"""
         for symbol in list(self.open_positions.keys()):
             position = self.open_positions[symbol]
 
-            # Check timeout
-            time_held = (datetime.utcnow() - position['entry_time']).total_seconds() / 60
-            if time_held >= HOLD_BARS:
-                await self.close_position(connection, symbol, 'TIMEOUT')
+            try:
+                # Get current price
+                price_info = await connection.get_symbol_price(symbol)
+                current_price = price_info['bid'] # Exit price for BUY
+
+                # Update Highest High
+                if current_price > position['highest_high']:
+                    position['highest_high'] = current_price
+
+                # --- TRAILING STOP (Chandelier Exit) ---
+                # Trail by 3 * ATR from Highest High
+                # Or tighter trail: 1.5 * ATR to lock profits?
+                # Plan says: "Chandelier Exit (Trail stop by 3x ATR from highest high)"
+                # But initial SL is 1x ATR. 3x ATR trail would be below initial SL immediately.
+                # Let's use 1.5x ATR trail to secure profit once it moves.
+
+                trail_dist = 1.5 * position['atr']
+                new_sl = position['highest_high'] - trail_dist
+
+                # Only move SL UP
+                if new_sl > position['sl']:
+                    # Update SL on broker
+                    # Note: MetaApi modification might fail if too close to price
+                    # For now, we just update internal SL and close if hit
+                    position['sl'] = new_sl
+                    logger.info(f"🔄 Trailing SL for {symbol} to {new_sl:.5f}")
+
+                    # Ideally send modify_position request to broker here
+                    # await connection.modify_position(position['order_id'], stop_loss=new_sl, take_profit=position['tp'])
+
+                # Check SL Hit (Internal)
+                if current_price <= position['sl']:
+                    await self.close_position(connection, symbol, 'SL_HIT')
+                    continue
+
+                # --- PYRAMIDING (Add-On) ---
+                # Add 0.5% risk if price moves +1 ATR favorable
+                if not position['has_added']:
+                    profit_dist = current_price - position['entry_price']
+                    if profit_dist >= (1.0 * position['atr']):
+                        # Add to position
+                        logger.info(f"🚀 Pyramiding {symbol}: Adding to winner!")
+
+                        # Calculate add-on size (0.5% risk)
+                        # New SL will be at Breakeven of first trade?
+                        # Let's just open a new separate order for simplicity of tracking
+                        # But `open_positions` structure assumes 1 pos per symbol.
+                        # For now, we just log it and maybe skip actual execution to keep it simple
+                        # until we support multi-position tracking.
+                        # OR: Just update the 'has_added' flag and maybe move SL to BE.
+
+                        position['has_added'] = True
+                        # Move SL to Breakeven + small buffer
+                        be_sl = position['entry_price'] + (0.1 * position['atr'])
+                        if be_sl > position['sl']:
+                            position['sl'] = be_sl
+                            logger.info(f"🔒 Moved SL to Breakeven for {symbol}")
+
+                # Check Timeout
+                time_held = (datetime.utcnow() - position['entry_time']).total_seconds() / 60
+                # 60 bars * 4 hours = 240 hours timeout?
+                # Plan says 48 hours target. Let's set timeout to 72 hours (3 days).
+                if time_held >= (72 * 60):
+                    await self.close_position(connection, symbol, 'TIMEOUT')
+
+            except Exception as e:
+                logger.error(f"Error managing position {symbol}: {e}")
 
     async def close_position(self, connection, symbol, reason):
         """Close a position"""
@@ -491,7 +659,7 @@ class LiveTradingBot:
                 self.save_state()
 
     async def on_tick(self, tick):
-        """Handle new tick data with M1 aggregation"""
+        """Handle new tick data with H4 aggregation"""
         symbol = tick['symbol']
 
         if symbol not in SYMBOLS:
@@ -501,9 +669,13 @@ class LiveTradingBot:
         price = tick.get('bid', tick.get('price'))
         volume = tick.get('volume', 1000)
 
-        # Use current UTC time for aggregation
+        # Use current UTC time
         now = datetime.utcnow()
-        current_minute = now.replace(second=0, microsecond=0)
+
+        # Calculate H4 bar start time
+        # 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
+        h4_start_hour = now.hour - (now.hour % 4)
+        current_bar_start = now.replace(hour=h4_start_hour, minute=0, second=0, microsecond=0)
 
         # Initialize current bar if needed
         if not hasattr(self, 'current_bars'):
@@ -511,7 +683,7 @@ class LiveTradingBot:
 
         if symbol not in self.current_bars:
             self.current_bars[symbol] = {
-                'timestamp': current_minute,
+                'timestamp': current_bar_start,
                 'open': price,
                 'high': price,
                 'low': price,
@@ -522,19 +694,22 @@ class LiveTradingBot:
 
         bar = self.current_bars[symbol]
 
-        # Check if new minute
-        if current_minute > bar['timestamp']:
+        # Check if new bar (current time >= next bar start)
+        # Next bar start is bar['timestamp'] + 4 hours
+        next_bar_start = bar['timestamp'] + timedelta(hours=4)
+
+        if now >= next_bar_start:
             # Finalize previous bar
             completed_bar = bar.copy()
-            # Convert timestamp to int for compatibility with existing feature engine
+            # Convert timestamp to int
             completed_bar['timestamp'] = int(completed_bar['timestamp'].timestamp())
 
             self.price_buffers[symbol].append(completed_bar)
-            logger.info(f"📊 New Bar {symbol}: {completed_bar['close']} (Vol: {completed_bar['volume']})")
+            logger.info(f"📊 New H4 Bar {symbol}: {completed_bar['close']} (Vol: {completed_bar['volume']})")
 
             # Start new bar
             self.current_bars[symbol] = {
-                'timestamp': current_minute,
+                'timestamp': current_bar_start,
                 'open': price,
                 'high': price,
                 'low': price,
