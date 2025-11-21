@@ -5,6 +5,8 @@ import logging
 from datetime import datetime
 from src.config import EODHD_API_KEY
 from src.shared.datatypes import TickData
+from src.shared.storage import InfluxWriter
+
 
 # Configure logging
 logging.basicConfig(
@@ -19,6 +21,10 @@ class FeedHandler:
         self.symbol = symbol
         self.uri = f"wss://ws.eodhistoricaldata.com/ws/forex?api_token={self.api_key}"
         self.running = False
+
+        # Initialize InfluxWriter with fixed token for now
+        self.writer = InfluxWriter(token="my-super-secret-auth-token")
+
 
     async def connect(self):
         self.running = True
@@ -67,8 +73,10 @@ class FeedHandler:
             logger.error(f"Error processing message: {e}")
 
     def handle_tick(self, tick: TickData):
-        # For now, just print/log. In future, push to Queue/Signal Engine.
-        logger.info(f"Tick received: {tick}")
+        # Write to InfluxDB
+        self.writer.write_tick(tick)
+        logger.info(f"Tick received and stored: {tick}")
+
 
 async def main():
     feed = FeedHandler(api_key=EODHD_API_KEY)
