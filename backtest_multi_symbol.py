@@ -197,14 +197,14 @@ def main():
 
     symbols = [
         ('EURUSD', 'data/raw/eurusd_m1_extended.csv', 'src/oracle/model.json', 0.50),
-        ('GBPUSD', 'data/raw/gbpusd_m1_extended.csv', 'src/oracle/model_gbpusd.json', 0.60),  # Higher threshold
+        # ('GBPUSD', 'data/raw/gbpusd_m1_extended.csv', 'src/oracle/model_gbpusd.json', 0.60),  # Removed - unprofitable
         ('AUDUSD', 'data/raw/audusd_m1_extended.csv', 'src/oracle/model_audusd.json', 0.50),
     ]
 
     all_results = []
 
     for symbol, data_path, model_path, threshold in symbols:
-        print(f"\n{symbol} using {threshold*100:.0f}% confidence threshold")
+        print(f"\nUsing {threshold*100:.0f}% confidence threshold for {symbol}")
         result = backtest_symbol(symbol, data_path, model_path, confidence_threshold=threshold)
         if result is not None and len(result) > 0:
             all_results.append(result)
