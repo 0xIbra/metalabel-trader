@@ -513,21 +513,13 @@ class LiveTradingBot:
                 # Connect to MetaApi
                 connection = await self.connect_metaapi()
 
+
                 # Send startup notification
                 account_info = await connection.get_account_information()
                 notify_startup(SYMBOLS, CONFIDENCE_THRESHOLD, account_info['balance'])
 
                 logger.info("🚀 Bot started. Monitoring signals...")
-
-                # Subscribe to market data with verification
-                for symbol in SYMBOLS:
-                    try:
-                        await connection.subscribe_to_market_data(symbol)
-                        logger.info(f"✅ Subscribed to {symbol} market data")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to subscribe to {symbol}: {e}")
-                        notify_error(f"Subscription failed for {symbol}", str(e))
-                        raise
+                logger.info(f"📡 Market data streaming for: {', '.join(SYMBOLS)}")
 
                 # Reset retry count after successful connection
                 retry_count = 0
