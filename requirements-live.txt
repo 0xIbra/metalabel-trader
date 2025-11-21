@@ -1,10 +1,8 @@
 # MetaApi Cloud SDK
-metaapi-cloud-sdk
+metaapi-cloud-sdk>=23.0.0
 requests
 
 # Async support
 aiohttp<4.0.0
-python-engineio>=4.0.0
-python-socketio>=5.0.0
 iso8601
 psutil
