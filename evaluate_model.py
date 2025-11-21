@@ -51,12 +51,12 @@ def compute_volume_delta(volume):
     v = volume.replace(0, 1)
     return np.log(v / v.shift(1))
 
-def evaluate_model(data_path="data/raw/eurusd_m1.csv", model_path="src/oracle/model.json"):
+def evaluate_model(data_path="data/raw/eurusd_m1_extended.csv", model_path="src/oracle/model.json"):
     """
     Comprehensive model evaluation with multiple metrics
     """
     logger.info("=" * 70)
-    logger.info("XGBOOST MODEL EVALUATION")
+    logger.info("XGBOOST MODEL EVALUATION (EXTENDED DATASET)")
     logger.info("=" * 70)
 
     # Load data

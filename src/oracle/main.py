@@ -28,41 +28,55 @@ class Oracle:
     def predict(self, features: dict) -> str:
         """
         Predict action based on features.
-        Features dict expected to contain keys like 'z_score', 'rsi', etc.
+        Features dict expected to contain 16 features matching training.
+        Returns 3-class prediction remapped from {0,1,2} to {-1,0,1}
+        Then applies confidence threshold for BUY signals.
         """
-        # Convert features dict to array expected by model
-        # This mapping needs to match training data exactly
-        # Features used in training: ['z_score', 'rsi', 'volatility']
-
+        # Feature vector matching training (16 features)
         feature_vector = np.array([[
+            # Technical indicators
             features.get("z_score", 0),
             features.get("rsi", 50),
             features.get("volatility", 0),
             features.get("adx", 0),
             features.get("time_sin", 0),
-            features.get("volume_delta", 0)
+            features.get("volume_delta", 0),
+            # Momentum
+            features.get("roc_5", 0),
+            features.get("roc_10", 0),
+            features.get("roc_20", 0),
+            features.get("macd", 0),
+            features.get("velocity", 0),
+            # Lag features
+            features.get("close_lag1", features.get("close", 0)),
+            features.get("close_lag2", features.get("close", 0)),
+            features.get("close_lag3", features.get("close", 0)),
+            features.get("returns_lag1", 0),
+            features.get("returns_lag2", 0)
         ]])
 
+        feature_names = [
+            'z_score', 'rsi', 'volatility', 'adx', 'time_sin', 'volume_delta',
+            'roc_5', 'roc_10', 'roc_20', 'macd', 'velocity',
+            'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2'
+        ]
 
-        # XGBoost expects DMatrix usually, or numpy array for scikit-learn API
-        # If using native Booster:
+        # Model is 3-class (labels 0, 1, 2 for SELL, NO_ACTION, BUY)
         if isinstance(self.model, xgb.Booster):
-            dtest = xgb.DMatrix(feature_vector, feature_names=['z_score', 'rsi', 'volatility', 'adx', 'time_sin', 'volume_delta'])
-            probs = self.model.predict(dtest)
+            dtest = xgb.DMatrix(feature_vector, feature_names=feature_names)
+            probs = self.model.predict(dtest)  # Returns probabilities for each class
 
-            # Native predict returns raw scores or probs depending on objective
-            # Assuming binary classification prob
-            prob = probs[0]
+            # probs shape: (1, 3) - probabilities for [SELL, NO_ACTION, BUY]
+            buy_prob = probs[0][2]  # Probability of BUY class (index 2)
+
+            logger.info(f"BUY Probability: {buy_prob:.4f}")
+
+            # Only trade BUY signals with >65% confidence
+            if buy_prob > 0.65:
+                return "EXECUTE"
+            else:
+                return "NO_ACTION"
         else:
-            # Mock Model
-            probs = self.model.predict_proba(feature_vector)
-            prob = probs[0][1] # Probability of class 1 (Action)
-
-        logger.info(f"Inference Probability: {prob:.4f}")
-
-        # Lowered threshold from 0.85 to 0.65 for better signal generation
-        if prob > 0.65:
-            return "EXECUTE"
-        else:
+            # Mock Model (fallback)
             return "NO_ACTION"
 
