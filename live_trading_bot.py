@@ -485,21 +485,62 @@ class LiveTradingBot:
                 self.save_state()
 
     async def on_tick(self, tick):
-        """Handle new tick data"""
+        """Handle new tick data with M1 aggregation"""
         symbol = tick['symbol']
 
         if symbol not in SYMBOLS:
             return
 
-        # Add to buffer
-        self.price_buffers[symbol].append({
-            'timestamp': int(datetime.utcnow().timestamp()),
-            'open': tick.get('bid', tick.get('price')),
-            'high': tick.get('bid', tick.get('price')),
-            'low': tick.get('bid', tick.get('price')),
-            'close': tick.get('bid', tick.get('price')),
-            'volume': tick.get('volume', 1000)
-        })
+        # Get tick data
+        price = tick.get('bid', tick.get('price'))
+        volume = tick.get('volume', 1000)
+
+        # Use current UTC time for aggregation
+        now = datetime.utcnow()
+        current_minute = now.replace(second=0, microsecond=0)
+
+        # Initialize current bar if needed
+        if not hasattr(self, 'current_bars'):
+            self.current_bars = {}
+
+        if symbol not in self.current_bars:
+            self.current_bars[symbol] = {
+                'timestamp': current_minute,
+                'open': price,
+                'high': price,
+                'low': price,
+                'close': price,
+                'volume': volume
+            }
+            return
+
+        bar = self.current_bars[symbol]
+
+        # Check if new minute
+        if current_minute > bar['timestamp']:
+            # Finalize previous bar
+            completed_bar = bar.copy()
+            # Convert timestamp to int for compatibility with existing feature engine
+            completed_bar['timestamp'] = int(completed_bar['timestamp'].timestamp())
+
+            self.price_buffers[symbol].append(completed_bar)
+            logger.info(f"📊 New Bar {symbol}: {completed_bar['close']} (Vol: {completed_bar['volume']})")
+
+            # Start new bar
+            self.current_bars[symbol] = {
+                'timestamp': current_minute,
+                'open': price,
+                'high': price,
+                'low': price,
+                'close': price,
+                'volume': volume
+            }
+        else:
+            # Update current bar
+            bar['high'] = max(bar['high'], price)
+            bar['low'] = min(bar['low'], price)
+            bar['close'] = price
+            bar['volume'] += volume
 
     async def run(self):
         """Main trading loop with reconnection logic"""
