@@ -128,12 +128,13 @@ class LiveTradingBot:
         """Load Global XGBoost model"""
         logger.info("Loading global model...")
 
-        model_path = "src/oracle/model_swing_global.json"
+       # Model path - using macro-enhanced model
+        MODEL_PATH = "src/oracle/model_swing_macro.json"
 
-        if os.path.exists(model_path):
+        if os.path.exists(MODEL_PATH):
             try:
                 model = xgb.Booster()
-                model.load_model(model_path)
+                model.load_model(MODEL_PATH)
                 self.model = model # Single global model
                 logger.info(f"✅ Loaded global model from {model_path}")
             except Exception as e:
