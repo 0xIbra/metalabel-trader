@@ -193,19 +193,25 @@ class LiveTradingBot:
             # Wait for deployment
             logger.info("Deploying account...")
             await asyncio.wait_for(self.account.deploy(), timeout=60)
+            logger.debug("Account deployed")
 
             # Wait for connection
             logger.info("Waiting for connection...")
             await asyncio.wait_for(self.account.wait_connected(), timeout=60)
+            logger.debug("Account connected")
 
             # Get connection
             connection = self.account.get_rpc_connection()
+            logger.debug("Connecting RPC...")
             await asyncio.wait_for(connection.connect(), timeout=60)
+            logger.debug("RPC connected, waiting for sync...")
             await asyncio.wait_for(connection.wait_synchronized(), timeout=60)
+            logger.debug("RPC synchronized")
 
             logger.info("✅ Connected to MetaApi")
 
             # Get account info
+            logger.debug("Getting account info...")
             account_info = await connection.get_account_information()
             logger.info(f"Account balance: ${account_info['balance']:.2f}")
 
@@ -619,8 +625,12 @@ class LiveTradingBot:
                 notify_shutdown("Manual stop")
                 break
 
+            except asyncio.CancelledError:
+                logger.error("❌ Task cancelled")
+                break
+
             except Exception as e:
-                logger.error(f"❌ Bot error: {e}")
+                logger.error(f"❌ Bot error: {e}", exc_info=True)
                 retry_count += 1
 
                 if retry_count < max_retries:
@@ -632,6 +642,11 @@ class LiveTradingBot:
                     logger.error("Max retries reached. Stopping bot.")
                     notify_error("Max reconnection attempts reached", "Bot stopped")
                     break
+
+            except BaseException as e:
+                logger.critical(f"❌ Critical error (BaseException): {type(e).__name__}: {e}", exc_info=True)
+                notify_error(f"Critical error: {type(e).__name__}", str(e))
+                break
 
         # Cleanup
         self.is_running = False
