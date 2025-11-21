@@ -11,6 +11,7 @@ import json
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from src.quant_engine.godmode import detect_liquidity_grab, get_swap_bias
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from collections import deque
@@ -425,24 +426,42 @@ class LiveTradingBot:
             if features is None:
                 continue
 
-            # Add placeholder macro features (TODO: integrate live sentiment feed)
-            # This part of the instruction seems to be misplaced or refers to a different context.
-            # The `compute_features` function already returns a numpy array, not a DataFrame.
-            # If the intention was to add these to the `features` array, the `feature_names` in `get_prediction`
-            # would also need to be adjusted to match the new array size.
-            # For now, I will add it as a comment to avoid breaking the code.
-            # If `compute_features` was changed to return a DataFrame, this would be valid.
-            # features_df = pd.DataFrame(features, columns=[...]) # Need feature names
-            # features_df['sentiment'] = 0.0
-            # features_df['sentiment_ma7'] = 0.0
-            # features_df['sentiment_std7'] = 0.0
-            # features = features_df.values # Convert back to numpy array if needed by get_prediction
-
             # Get prediction
             confidence = self.get_prediction(symbol, features)
 
+            # --- GODMODE ENHANCEMENTS ---
+
+            # 1. Liquidity Grab Detection (The "Stop-Hunt" Game)
+            # We need the price buffer to detect swings
+            buffer_df = pd.DataFrame(list(self.price_buffers[symbol]))
+            if len(buffer_df) < 22: continue # Need window + 1
+
+            high_arr = buffer_df['high'].values
+            low_arr = buffer_df['low'].values
+            close_arr = buffer_df['close'].values
+
+            liq_signal = detect_liquidity_grab(high_arr, low_arr, close_arr, window=20)
+
+            # 2. Carry Trade Filter (The "Free" Money)
+            swap_bias = get_swap_bias(symbol)
+
+            # Adjust Confidence based on Godmode factors
+            adjusted_confidence = confidence
+
+            # Boost for Bullish Liquidity Grab
+            if liq_signal == 1:
+                logger.info(f"💎 GODMODE: Bullish Liquidity Grab detected on {symbol}!")
+                adjusted_confidence += 0.2 # Significant boost
+
+            # Penalty for Negative Carry (trading against the house)
+            if swap_bias == -1:
+                logger.info(f"⚠️ Negative Swap Bias for {symbol}. Penalizing confidence.")
+                adjusted_confidence -= 0.1
+            elif swap_bias == 1:
+                 adjusted_confidence += 0.05 # Small boost for positive carry
+
             # Check threshold
-            if confidence < CONFIDENCE_THRESHOLD:
+            if adjusted_confidence < CONFIDENCE_THRESHOLD:
                 continue
 
             # Get current price
@@ -454,35 +473,38 @@ class LiveTradingBot:
                 continue
 
             # Calculate ATR for Risk Management
-            # We need the latest ATR from features or re-calculate
-            # Features: [..., atr_pct, ...] - index 8 in new feature set
-            # But better to recalculate or get from buffer to be precise
-            buffer_df = pd.DataFrame(list(self.price_buffers[symbol]))
-            if len(buffer_df) < 20: continue
-
-            high_arr = buffer_df['high'].values
-            low_arr = buffer_df['low'].values
-            close_arr = buffer_df['close'].values
             atr_arr = calculate_atr(high_arr, low_arr, close_arr, window=14)
             current_atr = atr_arr[-1]
 
             if current_atr == 0: continue
 
-            # Calculate TP/SL based on ATR
-            # Strategy: TP = 2 * ATR, SL = 1 * ATR
-            tp_dist = 2.0 * current_atr
+            # --- GODMODE RISK MANAGEMENT ---
+            # Trend Rider Logic (ADX > 25)
+            # We need ADX from features.
+            # Features index 3 is ADX (based on compute_features)
+            # [z_score, rsi, volatility, adx, ...]
+            adx_val = features[0][3]
+
+            if adx_val > 25:
+                # Strong Trend: Ride it!
+                logger.info(f"🌊 TREND MODE: ADX {adx_val:.1f} > 25. Extending targets!")
+                tp_dist = 10.0 * current_atr
+                trail_mult = 3.0
+            else:
+                # Normal Swing
+                tp_dist = 3.0 * current_atr
+                trail_mult = 2.5
+
             sl_dist = 1.0 * current_atr
 
             tp_price = current_price + tp_dist
             sl_price = current_price - sl_dist
 
             # Calculate lot size dynamically based on balance and risk
-            # Risk 1% of account
-            risk_amount = current_balance * 0.01
+            # Risk 5% of account (Godmode Trend)
+            risk_amount = current_balance * 0.05
 
             # Pip value approximation (Standard: $10/lot, JPY: $1000/lot approx)
-            # Precise: Risk / (SL_dist * ContractSize)
-            # Simplified:
             pip_value_per_lot = 1000 if 'JPY' in symbol else 10
             # Convert SL dist to pips for calculation
             pip_size = 0.01 if 'JPY' in symbol else 0.0001
@@ -496,6 +518,7 @@ class LiveTradingBot:
 
             # Place order
             try:
+                logger.info(f"🚀 ENTERING TRADE {symbol} | Conf: {confidence:.2f}->{adjusted_confidence:.2f} | Liq: {liq_signal} | Swap: {swap_bias}")
                 result = await connection.create_market_buy_order(
                     symbol=symbol,
                     volume=lot_size,
@@ -507,27 +530,14 @@ class LiveTradingBot:
                 self.open_positions[symbol] = {
                     'entry_time': datetime.utcnow(),
                     'entry_price': current_price,
-                    'lot_size': lot_size,
-                    'tp': tp_price,
                     'sl': sl_price,
-                    'confidence': confidence,
-                    'order_id': result['orderId'],
-                    'highest_high': current_price,
+                    'tp': tp_price,
                     'atr': current_atr,
-                    'has_added': False
+                    'highest_high': current_price, # For trailing stop
+                    'has_added': False,
+                    'trail_mult': trail_mult, # Dynamic Trailing Stop Multiplier
+                    'order_id': result['orderId'] if 'orderId' in result else 'mock_id'
                 }
-
-                # Save state immediately
-                self.save_state()
-
-                # Notify
-                notify_trade_entry(
-                    symbol, 'BUY', current_price, tp_price, sl_price,
-                    lot_size, risk_amount, confidence * 100
-                )
-
-                logger.info(f"🟢 Opened {symbol} @ {current_price:.5f} (Conf: {confidence:.1%}, ATR: {current_atr:.5f})")
-
             except Exception as e:
                 logger.error(f"Failed to open {symbol}: {e}")
                 notify_error(f"Failed to open {symbol}", str(e))
@@ -553,7 +563,9 @@ class LiveTradingBot:
                 # But initial SL is 1x ATR. 3x ATR trail would be below initial SL immediately.
                 # Let's use 1.5x ATR trail to secure profit once it moves.
 
-                trail_dist = 1.5 * position['atr']
+                # Trail by dynamic multiplier (Trend Rider: 3.0, Normal: 2.5)
+                trail_mult = position.get('trail_mult', 2.5)
+                trail_dist = trail_mult * position['atr']
                 new_sl = position['highest_high'] - trail_dist
 
                 # Only move SL UP
