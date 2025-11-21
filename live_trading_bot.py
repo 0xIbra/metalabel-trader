@@ -192,16 +192,16 @@ class LiveTradingBot:
 
             # Wait for deployment
             logger.info("Deploying account...")
-            await self.account.deploy()
+            await asyncio.wait_for(self.account.deploy(), timeout=60)
 
             # Wait for connection
             logger.info("Waiting for connection...")
-            await self.account.wait_connected()
+            await asyncio.wait_for(self.account.wait_connected(), timeout=60)
 
             # Get connection
             connection = self.account.get_rpc_connection()
-            await connection.connect()
-            await connection.wait_synchronized()
+            await asyncio.wait_for(connection.connect(), timeout=60)
+            await asyncio.wait_for(connection.wait_synchronized(), timeout=60)
 
             logger.info("✅ Connected to MetaApi")
 
