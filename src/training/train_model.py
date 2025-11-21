@@ -167,12 +167,12 @@ def train_model(data_path="data/raw/eurusd_m1_extended.csv", model_path="src/ora
 
     # ===== TRIPLE BARRIER LABELING =====
     logger.info("Applying Triple Barrier labeling...")
-    logger.info("Parameters: TP=1 pip, SL=1 pip (1:1 RR), Timeout=20 bars")
+    logger.info("Parameters: TP=5 pips, SL=1 pip (5:1 RR), Timeout=60 bars")
     labels = apply_triple_barrier_labels(
         df['close'].values,
-        take_profit_pips=1,   # Reduced from 2 to 1 (easier to hit)
-        stop_loss_pips=1,     # Keep at 1 (1:1 risk-reward)
-        timeout_bars=20       # Increased from 10 to 20 (more time to develop)
+        take_profit_pips=5,   # 5 pips for 5:1 risk-reward (optimal expectancy)
+        stop_loss_pips=1,     # Keep at 1 pip
+        timeout_bars=60       # 60 bars (1 hour) for 5-pip move to develop
     )
     df['target'] = labels
 

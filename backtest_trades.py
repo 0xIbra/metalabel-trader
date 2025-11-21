@@ -85,7 +85,7 @@ def backtest_trading_strategy(data_path="data/raw/eurusd_m1_extended.csv", model
     LEVERAGE = 30  # 1:30 leverage
     RISK_PERCENT = 0.02  # Risk 2% per trade
 
-    CONFIDENCE_THRESHOLD = 0.70  # Only trade when confidence > 70%
+    CONFIDENCE_THRESHOLD = 0.50  # Lower to 50% for rarer 5-pip targets
 
     # Calculate position size with proper risk management
     # Risk amount = Account × Risk%
@@ -108,9 +108,9 @@ def backtest_trading_strategy(data_path="data/raw/eurusd_m1_extended.csv", model
     MARGIN_USED = POSITION_SIZE / LEVERAGE  # $300 margin per trade
 
     SPREAD_PIPS = 0.5  # 0.5 pip spread (conservative)
-    TAKE_PROFIT_PIPS = 1  # 1 pip TP (matching training)
-    STOP_LOSS_PIPS = 1  # 1 pip SL (matching training)
-    HOLD_BARS = 20  # Maximum hold time (matching training timeout)
+    TAKE_PROFIT_PIPS = 5  # 5 pips TP (5:1 risk-reward ratio - optimal expectancy)
+    STOP_LOSS_PIPS = 1  # 1 pip SL
+    HOLD_BARS = 60  # 60 bars (1 hour) to allow 5-pip moves
 
     # Backtesting
     print("\nRunning backtest...")
