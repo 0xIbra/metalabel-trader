@@ -7,6 +7,7 @@ import os
 import sys
 import asyncio
 import logging
+import json
 import numpy as np
 import pandas as pd
 import xgboost as xgb
@@ -59,6 +60,7 @@ HOLD_BARS = 60  # 60 minutes timeout
 MAX_CONCURRENT_POSITIONS = 2  # 1 per symbol
 DAILY_LOSS_LIMIT = 20  # $20 max loss per day
 FEATURE_WINDOW = 100  # Keep last 100 bars for features
+STATE_FILE = 'state.json'  # State persistence file
 
 
 class LiveTradingBot:
@@ -77,6 +79,9 @@ class LiveTradingBot:
 
         # Load models
         self.load_models()
+
+        # Restore state if exists
+        self.load_state()
 
     def load_models(self):
         """Load XGBoost models for each symbol"""
@@ -98,6 +103,83 @@ class LiveTradingBot:
 
         if not self.models:
             raise Exception("No models loaded!")
+
+    def save_state(self):
+        """Save bot state to file for crash recovery"""
+        try:
+            state = {
+                'open_positions': {},
+                'trades_today': [],
+                'last_update': datetime.utcnow().isoformat()
+            }
+
+            # Serialize open positions (convert datetime to string)
+            for symbol, pos in self.open_positions.items():
+                state['open_positions'][symbol] = {
+                    'entry_time': pos['entry_time'].isoformat(),
+                    'entry_price': pos['entry_price'],
+                    'lot_size': pos['lot_size'],
+                    'tp': pos['tp'],
+                    'sl': pos['sl'],
+                    'confidence': pos['confidence'],
+                    'order_id': pos['order_id']
+                }
+
+            # Serialize trades (convert datetime to string)
+            for trade in self.trades_today:
+                state['trades_today'].append({
+                    'symbol': trade['symbol'],
+                    'pnl': trade['pnl'],
+                    'pips': trade['pips'],
+                    'reason': trade['reason'],
+                    'timestamp': trade['timestamp'].isoformat()
+                })
+
+            # Save to file
+            with open(STATE_FILE, 'w') as f:
+                json.dump(state, f, indent=2)
+
+            logger.debug(f"State saved: {len(self.open_positions)} positions, {len(self.trades_today)} trades")
+
+        except Exception as e:
+            logger.error(f"Failed to save state: {e}")
+
+    def load_state(self):
+        """Load bot state from file after crash"""
+        try:
+            if not os.path.exists(STATE_FILE):
+                logger.info("No previous state found")
+                return
+
+            with open(STATE_FILE, 'r') as f:
+                state = json.load(f)
+
+            # Check if state is recent (< 24 hours old)
+            last_update = datetime.fromisoformat(state['last_update'])
+            age_hours = (datetime.utcnow() - last_update).total_seconds() / 3600
+
+            if age_hours > 24:
+                logger.warning(f"State file is {age_hours:.1f} hours old, ignoring")
+                return
+
+            # Restore trades (convert string back to datetime)
+            for trade_data in state.get('trades_today', []):
+                trade_data['timestamp'] = datetime.fromisoformat(trade_data['timestamp'])
+                self.trades_today.append(trade_data)
+
+            # Restore positions (convert string back to datetime)
+            for symbol, pos_data in state.get('open_positions', {}).items():
+                pos_data['entry_time'] = datetime.fromisoformat(pos_data['entry_time'])
+                self.open_positions[symbol] = pos_data
+
+            logger.info(f"✅ State restored: {len(self.open_positions)} positions, {len(self.trades_today)} trades from {age_hours:.1f}h ago")
+
+            if self.open_positions:
+                logger.warning(f"⚠️ Restored open positions: {list(self.open_positions.keys())}")
+
+        except Exception as e:
+            logger.error(f"Failed to load state: {e}")
+            # Continue without state - safer than crashing
 
     async def connect_metaapi(self):
         """Connect to MetaApi"""
@@ -306,6 +388,9 @@ class LiveTradingBot:
                     'order_id': result['orderId']
                 }
 
+                # Save state immediately
+                self.save_state()
+
                 # Notify
                 await notify_trade_entry(
                     symbol, 'BUY', current_price, tp_price, sl_price,
@@ -389,11 +474,15 @@ class LiveTradingBot:
             # Remove position
             del self.open_positions[symbol]
 
+            # Save state immediately
+            self.save_state()
+
         except Exception as e:
             logger.error(f"Failed to close {symbol}: {e}")
             # Still remove from tracking to avoid stuck state
             if symbol in self.open_positions:
                 del self.open_positions[symbol]
+                self.save_state()
 
     async def on_tick(self, tick):
         """Handle new tick data"""
@@ -475,6 +564,10 @@ class LiveTradingBot:
                             )
                             last_status = datetime.utcnow()
 
+                        # Periodic state save (every 5 minutes as safety backup)
+                        if (datetime.utcnow() - last_heartbeat).total_seconds() >= 300:
+                            self.save_state()
+
                         # Sleep for 1 minute
                         await asyncio.sleep(60)
 
@@ -509,6 +602,9 @@ class LiveTradingBot:
 
         # Cleanup
         self.is_running = False
+
+        # Save final state
+        self.save_state()
 
         # Close any open positions on shutdown
         if connection and self.open_positions:

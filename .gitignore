@@ -32,6 +32,9 @@ data/
 # Model artifacts
 src/oracle/model.json.old
 
+# State persistence
+state.json
+
 # Test scripts (optional - comment out to commit)
 # test_*.py
 # find_metaapi_account.py
