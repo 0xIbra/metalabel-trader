@@ -17,33 +17,41 @@ def calculate_log_returns(prices: np.ndarray) -> np.ndarray:
     return res
 
 @jit(nopython=True, cache=True)
-def calculate_volatility(log_returns: np.ndarray, window: int) -> float:
+def calculate_volatility(log_returns: np.ndarray, window: int) -> np.ndarray:
     """
-    Calculate standard deviation of log returns over the last 'window' periods.
-    Returns the volatility of the *last* window.
+    Calculate rolling standard deviation of log returns.
     """
-    if len(log_returns) < window:
-        return 0.0
+    n = len(log_returns)
+    vol = np.zeros(n)
+    if n < window:
+        return vol
 
-    # Take the last 'window' elements
-    slice_arr = log_returns[-window:]
-    return np.std(slice_arr)
+    for i in range(window, n):
+        slice_arr = log_returns[i-window+1:i+1]
+        vol[i] = np.std(slice_arr)
+    return vol
+
 
 @jit(nopython=True, cache=True)
-def calculate_z_score(price: float, window_prices: np.ndarray) -> float:
+def calculate_z_score(prices: np.ndarray, window: int) -> np.ndarray:
     """
-    Calculate Z-Score: (Price - MA) / StdDev
+    Calculate rolling Z-Score: (Price - MA) / StdDev
     """
-    if len(window_prices) < 2:
-        return 0.0
+    n = len(prices)
+    z_scores = np.zeros(n)
+    if n < window:
+        return z_scores
 
-    mean = np.mean(window_prices)
-    std = np.std(window_prices)
+    for i in range(window, n):
+        slice_arr = prices[i-window+1:i+1]
+        mean = np.mean(slice_arr)
+        std = np.std(slice_arr)
 
-    if std == 0:
-        return 0.0
+        if std != 0:
+            z_scores[i] = (prices[i] - mean) / std
 
-    return (price - mean) / std
+    return z_scores
+
 
 @jit(nopython=True, cache=True)
 def calculate_ema(prices: np.ndarray, window: int) -> np.ndarray:
@@ -62,44 +70,145 @@ def calculate_ema(prices: np.ndarray, window: int) -> np.ndarray:
         ema[i] = alpha * prices[i] + (1 - alpha) * ema[i-1]
     return ema
 
-@jit(nopython=True, cache=True)
-def calculate_rsi(prices: np.ndarray, window: int = 14) -> float:
+@jit(nopython=True)
+def calculate_rsi(prices, period=14):
     """
-    Calculate RSI for the last point.
+    Calculate RSI using Numba.
     """
-    if len(prices) <= window:
-        return 50.0
-
     deltas = np.diff(prices)
-    seed = deltas[:window]
-    up = seed[seed >= 0].sum() / window
-    down = -seed[seed < 0].sum() / window
+    seed = deltas[:period+1]
+    up = seed[seed >= 0].sum() / period
+    down = -seed[seed < 0].sum() / period
 
-    if down != 0:
-        rs = up / down
+    if down == 0:
+        rs = 100.0  # If no downward movement, RSI is 100
     else:
-        rs = 0.0 # Avoid div by zero, though technically RSI is 100 if down is 0
-        if up > 0: return 100.0
+        rs = up / down
 
-    rsi = 100. - (100. / (1. + rs))
+    rsi = np.zeros_like(prices)
+    rsi[:period] = 100. - 100. / (1. + rs)
 
-    # Calculate for the rest
-    for i in range(window, len(deltas)):
-        delta = deltas[i]
+    for i in range(period, len(prices)):
+        delta = deltas[i - 1]  # diff is 1 shorter
+
         if delta > 0:
-            up_val = delta
-            down_val = 0.
+            upval = delta
+            downval = 0.
         else:
-            up_val = 0.
-            down_val = -delta
+            upval = 0.
+            downval = -delta
 
-        up = (up * (window - 1) + up_val) / window
-        down = (down * (window - 1) + down_val) / window
+        up = (up * (period - 1) + upval) / period
+        down = (down * (period - 1) + downval) / period
 
         if down == 0:
-            rsi = 100.0
+            rsi[i] = 100.0
         else:
             rs = up / down
-            rsi = 100. - (100. / (1. + rs))
+            rsi[i] = 100. - 100. / (1. + rs)
 
     return rsi
+
+@jit(nopython=True)
+def calculate_adx(high, low, close, period=14):
+    """
+    Calculate ADX using Numba.
+    """
+    n = len(close)
+    tr = np.zeros(n)
+    plus_dm = np.zeros(n)
+    minus_dm = np.zeros(n)
+
+    # Calculate TR and DM
+    for i in range(1, n):
+        h_l = high[i] - low[i]
+        h_pc = abs(high[i] - close[i-1])
+        l_pc = abs(low[i] - close[i-1])
+        tr[i] = max(h_l, max(h_pc, l_pc))
+
+        delta_h = high[i] - high[i-1]
+        delta_l = low[i-1] - low[i]
+
+        if (delta_h > delta_l) and (delta_h > 0):
+            plus_dm[i] = delta_h
+        else:
+            plus_dm[i] = 0.0
+
+        if (delta_l > delta_h) and (delta_l > 0):
+            minus_dm[i] = delta_l
+        else:
+            minus_dm[i] = 0.0
+
+    # Smooth TR, +DM, -DM (Wilder's Smoothing)
+    # First value is simple sum
+    tr_smooth = np.zeros(n)
+    plus_dm_smooth = np.zeros(n)
+    minus_dm_smooth = np.zeros(n)
+
+    tr_smooth[period] = np.sum(tr[1:period+1])
+    plus_dm_smooth[period] = np.sum(plus_dm[1:period+1])
+    minus_dm_smooth[period] = np.sum(minus_dm[1:period+1])
+
+    for i in range(period + 1, n):
+        tr_smooth[i] = tr_smooth[i-1] - (tr_smooth[i-1] / period) + tr[i]
+        plus_dm_smooth[i] = plus_dm_smooth[i-1] - (plus_dm_smooth[i-1] / period) + plus_dm[i]
+        minus_dm_smooth[i] = minus_dm_smooth[i-1] - (minus_dm_smooth[i-1] / period) + minus_dm[i]
+
+    # Calculate DI and DX
+    plus_di = np.zeros(n)
+    minus_di = np.zeros(n)
+    dx = np.zeros(n)
+
+    for i in range(period, n):
+        if tr_smooth[i] != 0:
+            plus_di[i] = 100 * (plus_dm_smooth[i] / tr_smooth[i])
+            minus_di[i] = 100 * (minus_dm_smooth[i] / tr_smooth[i])
+
+        sum_di = plus_di[i] + minus_di[i]
+        if sum_di != 0:
+            dx[i] = 100 * abs(plus_di[i] - minus_di[i]) / sum_di
+
+    # Calculate ADX (Smooth DX)
+    adx = np.zeros(n)
+    adx[2*period - 1] = np.mean(dx[period:2*period])
+
+    for i in range(2*period, n):
+        adx[i] = (adx[i-1] * (period - 1) + dx[i]) / period
+
+    return adx
+
+@jit(nopython=True)
+def calculate_time_sin(timestamps):
+    """
+    Calculate Sine of time of day.
+    """
+    n = len(timestamps)
+    result = np.zeros(n)
+    seconds_in_day = 24 * 60 * 60
+
+    for i in range(n):
+        # Assuming timestamp is unix epoch
+        # We want time within the day.
+        # timestamp % seconds_in_day gives seconds since 00:00 UTC (roughly)
+        # Ideally we use struct_time but numba doesn't like it.
+        # Simple modulo is fast and works for periodicity.
+        time_of_day = timestamps[i] % seconds_in_day
+        result[i] = np.sin(2 * np.pi * time_of_day / seconds_in_day)
+
+    return result
+
+@jit(nopython=True)
+def calculate_volume_delta(volumes):
+    """
+    Calculate Log Change in Volume.
+    """
+    n = len(volumes)
+    result = np.zeros(n)
+
+    for i in range(1, n):
+        if volumes[i-1] > 0 and volumes[i] > 0:
+            result[i] = np.log(volumes[i] / volumes[i-1])
+        else:
+            result[i] = 0.0
+
+    return result

@@ -11,7 +11,7 @@ from src.oracle.mock_model import MockModel
 logger = logging.getLogger("Oracle")
 
 class Oracle:
-    def __init__(self, model_path: str = None):
+    def __init__(self, model_path: str = "src/oracle/model.json"):
         self.model = None
         if model_path and os.path.exists(model_path):
             try:
@@ -32,20 +32,24 @@ class Oracle:
         """
         # Convert features dict to array expected by model
         # This mapping needs to match training data exactly
-        # For now, we'll just pass a dummy array to the mock model
+        # Features used in training: ['z_score', 'rsi', 'volatility']
 
-        # Example feature vector construction (placeholder)
         feature_vector = np.array([[
             features.get("z_score", 0),
             features.get("rsi", 50),
-            features.get("volatility", 0)
+            features.get("volatility", 0),
+            features.get("adx", 0),
+            features.get("time_sin", 0),
+            features.get("volume_delta", 0)
         ]])
+
 
         # XGBoost expects DMatrix usually, or numpy array for scikit-learn API
         # If using native Booster:
         if isinstance(self.model, xgb.Booster):
-            dtest = xgb.DMatrix(feature_vector)
+            dtest = xgb.DMatrix(feature_vector, feature_names=['z_score', 'rsi', 'volatility', 'adx', 'time_sin', 'volume_delta'])
             probs = self.model.predict(dtest)
+
             # Native predict returns raw scores or probs depending on objective
             # Assuming binary classification prob
             prob = probs[0]

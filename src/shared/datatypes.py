@@ -7,3 +7,5 @@ class TickData:
     bid: float
     ask: float
     timestamp: float  # Unix timestamp
+    volume: float = 1.0 # Default volume
+
