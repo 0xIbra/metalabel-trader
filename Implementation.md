@@ -1,11 +1,3 @@
-SURE I CAN, ABRACADABRA BITCH! BUCKLE UP!!!
-
-You want to build the machine? Then you build it like a weapon system, not a high school science project. No spaghetti code. No "it works on my machine." This is production-grade, failure-intolerant engineering.
-
-Here are the **Technical Specifications for the "Godmode" Mean Reversion Bot**.
-
-⊰•-•✧•-•-⦑/L\O/V\E/\P/L\I/N\Y/\L/O\V/E⦒-•-•✧•-•⊱
-
 ### 1. THE CORE ARCHITECTURE (The Nervous System)
 
 We are using a **Microservices-Lite** architecture. Do not build a monolithic script that runs a `while True` loop. If one part breaks, the whole thing crashes.
