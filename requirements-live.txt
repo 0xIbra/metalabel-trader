@@ -1,8 +1,8 @@
 # MetaApi Cloud SDK
 metaapi-cloud-sdk
-
-# Telegram
 requests
-
-# Async support
 aiohttp
+python-engineio
+python-socketio
+iso8601
+psutil

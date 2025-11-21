@@ -1,0 +1,17 @@
+[Unit]
+Description=Trading Bot Watchdog
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/metalabel-trader
+Environment="PATH=/home/ubuntu/metalabel-trader/venv/bin:/usr/bin"
+ExecStart=/home/ubuntu/metalabel-trader/venv/bin/python watchdog.py
+Restart=always
+RestartSec=60
+StandardOutput=append:/home/ubuntu/metalabel-trader/logs/watchdog.log
+StandardError=append:/home/ubuntu/metalabel-trader/logs/watchdog-error.log
+
+[Install]
+WantedBy=multi-user.target

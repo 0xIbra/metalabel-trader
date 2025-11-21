@@ -1,0 +1,21 @@
+[Unit]
+Description=MetaLabel Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/metalabel-trader
+Environment="PATH=/home/ubuntu/metalabel-trader/venv/bin:/usr/bin"
+ExecStart=/home/ubuntu/metalabel-trader/venv/bin/python live_trading_bot.py
+Restart=always
+RestartSec=30
+StandardOutput=append:/home/ubuntu/metalabel-trader/logs/bot.log
+StandardError=append:/home/ubuntu/metalabel-trader/logs/bot-error.log
+
+# Restart policy
+StartLimitBurst=5
+StartLimitIntervalSec=600
+
+[Install]
+WantedBy=multi-user.target
