@@ -1,181 +1,225 @@
-# Metalabel Trader
+# Metalabel Trader - XGBoost Forex Trading Bot
 
-Profitable algorithmic trading system with AI-driven signal generation for EURUSD M1 data.
+High-performance algorithmic trading system using XGBoost ML models with Multi-Symbol support and Live Paper Trading via MetaApi.
 
-## System Overview
+## 🎯 Performance Summary
 
-- **Win Rate**: 55% with 70% confidence filter
-- **Returns**: +0.77% over 90 days (3.08% annualized)
-- **Architecture**: Microservices-lite with event-driven data flow
-- **ML Model**: XGBoost 3-class classifier with 16 features
+**Strategy**: 5:1 Risk-Reward (TP=5 pips, SL=1 pip, 50% confidence threshold)
 
-## Components
+### Backtest Results (90 days, $1,000 account)
 
-### Feed Handler
-- Real-time tick data from EODHD WebSocket
-- Persists to InfluxDB
+| Strategy | Symbols | Trades | Win Rate | P&L | Return | Annualized |
+|----------|---------|--------|----------|-----|--------|------------|
+| **Optimized Multi-Symbol** | EURUSD + AUDUSD | 43 | 34.9% | **+$39.96** | **+4.00%** | **16.2%** |
+| Single Symbol | EURUSD only | 27 | 33.3% | +$40.77 | +4.08% | 16.3% |
 
-### Quant Engine
-- **Performance**: 0.011ms latency (4,545x faster than requirement)
-- **Features**: 16 Numba-optimized indicators
-- Technical, momentum, and lag features
+**Key Metrics**:
+- Profit Factor: 2.63
+- Trade Frequency: ~0.5/day (1 every 2 days)
+- Max Drawdown: <2%
+- Sharpe Ratio: 8.85
 
-### Oracle (AI)
-- XGBoost 3-class classification (SELL/NO_ACTION/BUY)
-- Triple Barrier labeling (TP=1 pip, SL=1 pip, TO=20 bars)
-- 70% confidence threshold filter
-- 0.332ms inference time
+---
 
-### Risk Manager
-- 2% risk per trade
-- 30% max margin utilization
-- Dynamic position sizing
+## 🚀 Quick Start
 
-## Quick Start
-
-### 1. Setup Environment
+### 1. Install Dependencies
 ```bash
-# Copy environment template
-cp .env.example .env
-
-# Edit .env with your EODHD API key and InfluxDB credentials
-# EODHD_API_KEY=your_key_here
+pip install -r requirements.txt
+pip install -r requirements-live.txt  # For live trading
 ```
 
-### 2. Start Services
+### 2. Set Up Environment
+Create `.env` file:
 ```bash
-# Start InfluxDB
-docker-compose up -d
+# Data API
+EODHD_API_KEY=your_key_here
 
-# Verify InfluxDB
-python verify_influx.py
+# Live Trading (Optional)
+METAAPI_TOKEN=your_metaapi_token
+METAAPI_ACCOUNT_ID=your_account_id
+TELEGRAM_BOT_TOKEN=your_telegram_token
+TELEGRAM_CHAT_ID=your_chat_id
 ```
 
-### 3. Train Model
+### 3. Fetch Data & Train Models
 ```bash
-# Fetch 90 days of data
-python fetch_extended_data.py
+# Fetch 90 days of M1 data
+python3.10 fetch_multi_symbol_data.py
 
-# Train XGBoost model with triple barrier labeling
-python -m src.training.train_model
-
-# Evaluate model
-python evaluate_model.py
+# Train models for EURUSD and AUDUSD
+python3.10 -m src.training.train_model --symbol EURUSD
+python3.10 -m src.training.train_model --symbol AUDUSD
 ```
 
-### 4. Backtest
+### 4. Run Backtest
 ```bash
-# Run backtest with $1K account, 1:30 leverage
-python backtest_trades.py
-
-# Walk-forward validation
-python walk_forward_validation.py
-python rolling_window_validation.py
+python3.10 backtest_multi_symbol.py
 ```
 
-### 5. Run Tests
+### 5. Live Paper Trading (Optional)
 ```bash
-pytest tests/
+# Test connections
+python3.10 test_telegram.py
+python3.10 test_metaapi.py
+
+# Start live bot
+python3.10 live_trading_bot.py
 ```
 
-## Performance Benchmarks
+See [LIVE_TRADING.md](LIVE_TRADING.md) for detailed setup.
 
-### Latency (per operation)
-- Quant Engine: 0.011ms
-- Oracle Inference: 0.332ms
-- End-to-End: 0.339ms
+---
 
-### Backtest Results (90 days, $1K account, 1:30 leverage)
-- Trades: 100
-- Win Rate: 55%
-- P&L: +$7.74
-- Return: +0.77%
-- Max Drawdown: $12.24 (1.2%)
-- Sharpe Ratio: 1.38
+## 📁 Project Structure
 
-### Walk-Forward Validation
-- **Expanding Window**: F1=0.39, CV=0.04 (highly consistent)
-- **Rolling Window**: F1=0.40, CV=0.02 (very consistent)
-
-## Model Details
-
-### Features (16 total)
-**Technical**: z_score, rsi, volatility, adx, time_sin, volume_delta
-**Momentum**: roc_5, roc_10, roc_20, macd, velocity
-**Lag**: close_lag1-3, returns_lag1-2
-
-### Labeling Strategy
-Triple Barrier Method:
-- Take-Profit: 1 pip
-- Stop-Loss: 1 pip
-- Timeout: 20 bars (20 minutes)
-
-### Class Distribution
-- SELL/Avoid: 48%
-- BUY: 48%
-- NO_ACTION: 4%
-
-## Architecture
-
-```
-┌─────────────────┐
-│  Feed Handler   │ ──▶ EODHD WebSocket
-│  (Real-time)    │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Quant Engine   │ ──▶ 16 Numba Features
-│  (0.011ms)      │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Oracle (AI)    │ ──▶ XGBoost Inference
-│  (0.332ms)      │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Risk Manager +  │ ──▶ Position Sizing
-│  Executioner    │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   InfluxDB      │ ──▶ Persistence
-│  (Data Layer)   │
-└─────────────────┘
-```
-
-## Development
-
-### Project Structure
 ```
 metalabel-trader/
 ├── src/
-│   ├── feed_handler/      # Real-time data ingestion
-│   ├── quant_engine/      # Feature engineering
-│   ├── oracle/            # AI inference
-│   ├── executioner/       # Order execution
-│   ├── training/          # Model training pipeline
-│   └── shared/            # Common datatypes
-├── tests/                 # Unit tests
-├── data/raw/              # Historical data
-├── docker-compose.yml     # InfluxDB setup
-└── backtest_trades.py     # Backtesting script
+│   ├── oracle/              # Trained XGBoost models
+│   │   ├── model.json       # EURUSD model
+│   │   └── model_audusd.json # AUDUSD model
+│   ├── quant_engine/        # Technical indicators
+│   ├── training/            # Model training
+│   │   ├── train_model.py   # Training script
+│   │   └── triple_barrier.py # Labeling method
+│   └── notifications/       # Telegram alerts
+├── data/raw/                # M1 OHLCV data
+├── backtest_multi_symbol.py # Multi-symbol backtest
+├── live_trading_bot.py      # Live paper trading
+└── LIVE_TRADING.md          # Live trading guide
 ```
 
-### Key Files
-- `src/training/train_model.py` - Model training with triple barrier
-- `backtest_trades.py` - Trading simulation
-- `benchmark_performance.py` - Latency benchmarks
-- `walk_forward_validation.py` - Time-series validation
+---
 
-## Risk Disclaimer
+## 🎓 Strategy Details
 
-This is an educational/research project. Use at your own risk. Past performance does not guarantee future results. Always test thoroughly in a demo environment before live trading.
+### Triple Barrier Labeling
+- **Take Profit**: 5 pips (5:1 risk-reward)
+- **Stop Loss**: 1 pip
+- **Timeout**: 60 bars (1 hour)
+- **Classes**: SELL (-1), NO_ACTION (0), BUY (1)
 
-## License
+### Features (16 total)
+**Technical Indicators**:
+- Z-Score (price normalization)
+- RSI (momentum)
+- Volatility (20-period)
+- ADX (trend strength)
+- Time encoding (sin/cos)
+- Volume delta
 
-MIT
+**Momentum**:
+- ROC (5, 10, 20 periods)
+- MACD
+- Price velocity
+
+**Lag Features**:
+- Close price lags (1-3 bars)
+- Returns lags (1-2 bars)
+
+### Model Architecture
+- **Algorithm**: XGBoost (Gradient Boosting)
+- **Objective**: Multi-class classification (3 classes) or Binary (2 classes)
+- **Trees**: 200
+- **Learning Rate**: 0.05
+- **Max Depth**: 4
+- **Regularization**: L2 (gamma=0.1)
+
+---
+
+## 📊 Live Trading Features
+
+- **MetaApi Integration**: Cloud-based MT4/MT5 connection
+- **Telegram Alerts**: Real-time notifications for all events
+- **Safety Limits**:
+  - Max 2 concurrent positions (1 per symbol)
+  - Daily loss limit: $20
+  - Timeout: 60 minutes
+- **Monitoring**: Hourly status updates
+
+---
+
+## 🛠️ Development
+
+### Run Tests
+```bash
+python3.10 -m pytest tests/
+```
+
+### Retrain Models
+```bash
+# After fetching new data
+python3.10 -m src.training.train_model --symbol EURUSD
+python3.10 -m src.training.train_model --symbol AUDUSD
+```
+
+### Stress Test
+```bash
+python3.10 stress_test_backtest.py
+```
+
+---
+
+## 📈 Expected Live Performance
+
+Based on backtests:
+- **Trades/Week**: ~3-4
+- **Weekly P&L**: ~$3-4
+- **Monthly Return**: ~1.3%
+- **Alerts/Day**: 3-5 (trades + status)
+
+---
+
+## ⚠️ Disclaimer
+
+**This system is for educational and paper trading purposes only.**
+
+- Start with demo accounts
+- Past performance does not guarantee future results
+- Trading involves substantial risk of loss
+- Never risk more than you can afford to lose
+
+---
+
+## 📚 Documentation
+
+- [LIVE_TRADING.md](LIVE_TRADING.md) - Live trading setup guide
+- [F1_IMPROVEMENT_PLAN.md](F1_IMPROVEMENT_PLAN.md) - Model optimization history
+- [STRATEGY_COMPARISON.md](STRATEGY_COMPARISON.md) - Risk-reward analysis
+
+---
+
+## 🔧 Troubleshooting
+
+### No Trades in Backtest
+- Check confidence threshold (try lowering to 45%)
+- Verify model files exist
+- Ensure data has enough bars (>100)
+
+### Live Bot Not Trading
+- Bot needs ~100 minutes to warm up
+- Check MetaApi connection
+- Verify Telegram is receiving status updates
+- Check logs: `logs/live_trading.log`
+
+### MetaApi Connection Issues
+- Ensure account is deployed
+- Check token and account ID in `.env`
+- Try restarting account in MetaApi dashboard
+
+---
+
+## 📞 Support
+
+For issues:
+1. Check logs in `logs/`
+2. Review [LIVE_TRADING.md](LIVE_TRADING.md)
+3. Verify environment variables in `.env`
+4. Test components individually with `test_*.py` scripts
+
+---
+
+**Version**: 1.0.0
+**Last Updated**: 2025-11-21
+**License**: MIT

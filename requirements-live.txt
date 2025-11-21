@@ -1,0 +1,8 @@
+# MetaApi Cloud SDK
+metaapi-cloud-sdk
+
+# Telegram
+requests
+
+# Async support
+aiohttp

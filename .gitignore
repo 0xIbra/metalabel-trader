@@ -32,6 +32,10 @@ data/
 # Model artifacts
 src/oracle/model.json.old
 
+# Test scripts (optional - comment out to commit)
+# test_*.py
+# find_metaapi_account.py
+
 # OS
 .DS_Store
 Thumbs.db
