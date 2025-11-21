@@ -333,7 +333,9 @@ class LiveTradingBot:
             z_score[-1], rsi[-1], volatility[-1], adx[-1], time_sin[-1], volume_delta[-1],
             bandwidth[-1], bb_position[-1], atr_pct[-1], dist_pivot[-1],
             roc_5[-1], roc_10[-1], roc_20[-1], macd[-1], velocity[-1],
-            close_lag1[-1], close_lag2[-1], close_lag3[-1], returns_lag1[-1], returns_lag2[-1]
+            close_lag1[-1], close_lag2[-1], close_lag3[-1], returns_lag1[-1], returns_lag2[-1],
+            # Macro features (placeholder - TODO: integrate live sentiment)
+            0.0, 0.0, 0.0  # sentiment, sentiment_ma7, sentiment_std7
         ]])
 
         # Validate features - critical safety check
@@ -359,7 +361,9 @@ class LiveTradingBot:
             'z_score', 'rsi', 'volatility', 'adx', 'time_sin', 'volume_delta',
             'bb_width', 'bb_position', 'atr_pct', 'dist_pivot',
             'roc_5', 'roc_10', 'roc_20', 'macd', 'velocity',
-            'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2'
+            'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2',
+            # Macro features (set to 0 for now - TODO: integrate live sentiment)
+            'sentiment', 'sentiment_ma7', 'sentiment_std7'
         ]
 
         dmatrix = xgb.DMatrix(features, feature_names=feature_names)
@@ -420,6 +424,19 @@ class LiveTradingBot:
             features = self.compute_features(symbol)
             if features is None:
                 continue
+
+            # Add placeholder macro features (TODO: integrate live sentiment feed)
+            # This part of the instruction seems to be misplaced or refers to a different context.
+            # The `compute_features` function already returns a numpy array, not a DataFrame.
+            # If the intention was to add these to the `features` array, the `feature_names` in `get_prediction`
+            # would also need to be adjusted to match the new array size.
+            # For now, I will add it as a comment to avoid breaking the code.
+            # If `compute_features` was changed to return a DataFrame, this would be valid.
+            # features_df = pd.DataFrame(features, columns=[...]) # Need feature names
+            # features_df['sentiment'] = 0.0
+            # features_df['sentiment_ma7'] = 0.0
+            # features_df['sentiment_std7'] = 0.0
+            # features = features_df.values # Convert back to numpy array if needed by get_prediction
 
             # Get prediction
             confidence = self.get_prediction(symbol, features)

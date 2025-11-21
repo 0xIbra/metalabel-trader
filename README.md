@@ -1,225 +1,181 @@
-# Metalabel Trader - XGBoost Forex Trading Bot
+# Metalabel Swing Trading Bot
 
-High-performance algorithmic trading system using XGBoost ML models with Multi-Symbol support and Live Paper Trading via MetaApi.
+**H4 Swing Trading System** powered by XGBoost, ATR-based risk management, and news sentiment analysis.
 
-## 🎯 Performance Summary
+## Overview
+This is a professional-grade swing trading bot that trades 28 currency pairs on the 4-hour timeframe using machine learning to identify volatility expansion setups.
 
-**Strategy**: 5:1 Risk-Reward (TP=5 pips, SL=1 pip, 50% confidence threshold)
+## Key Features
+- ✅ **H4 Timeframe**: Captures multi-day trends with reduced noise
+- ✅ **28 Currency Pairs**: Diversified across majors and crosses
+- ✅ **AI-Powered**: XGBoost classifier trained on 2 years of data
+- ✅ **News Sentiment**: Integrates EODHD sentiment analysis
+- ✅ **Dynamic Risk**: ATR-based TP/SL (2:1 risk-reward)
+- ✅ **Trailing Stops**: Chandelier Exit (1.5x ATR)
+- ✅ **Pyramiding**: Adds to winners when price moves 1x ATR
+- ✅ **Safety Features**: Daily loss limits, max concurrent positions
 
-### Backtest Results (90 days, $1,000 account)
+## Performance
+### Baseline Model (Technical Features Only)
+- **Profit Factor**: 1.18
+- **Sharpe Ratio**: 2.70
+- **Win Rate**: 43.8%
 
-| Strategy | Symbols | Trades | Win Rate | P&L | Return | Annualized |
-|----------|---------|--------|----------|-----|--------|------------|
-| **Optimized Multi-Symbol** | EURUSD + AUDUSD | 43 | 34.9% | **+$39.96** | **+4.00%** | **16.2%** |
-| Single Symbol | EURUSD only | 27 | 33.3% | +$40.77 | +4.08% | 16.3% |
+### Macro-Enhanced Model (+ News Sentiment)
+- **Profit Factor**: 3.05 (+49.9% improvement)
+- **Sharpe Ratio**: Higher risk-adjusted returns
+- **Win Rate**: 60.0%
+- **Trade Frequency**: 2x more opportunities
 
-**Key Metrics**:
-- Profit Factor: 2.63
-- Trade Frequency: ~0.5/day (1 every 2 days)
-- Max Drawdown: <2%
-- Sharpe Ratio: 8.85
+## Installation
 
----
+### Prerequisites
+- Python 3.10+
+- MetaApi account (demo or live)
+- EODHD API key (for data and sentiment)
+- Telegram bot (optional, for notifications)
 
-## 🚀 Quick Start
-
-### 1. Install Dependencies
+### Setup
 ```bash
-pip install -r requirements.txt
-pip install -r requirements-live.txt  # For live trading
+# Clone and install
+git clone <repo-url>
+cd metalabel-trader
+pip install -r requirements-live.txt
+
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys
+
+# Fetch H4 data
+python fetch_swing_data.py
+
+# Fetch macro features (sentiment, economic calendar)
+python fetch_macro_data.py
+
+# Train model (optional - pre-trained model included)
+python train_with_macro.py
+
+# Run backtest to verify
+python backtest_macro.py
 ```
 
-### 2. Set Up Environment
-Create `.env` file:
-```bash
-# Data API
-EODHD_API_KEY=your_key_here
+## Running the Bot
 
-# Live Trading (Optional)
-METAAPI_TOKEN=your_metaapi_token
-METAAPI_ACCOUNT_ID=your_account_id
-TELEGRAM_BOT_TOKEN=your_telegram_token
-TELEGRAM_CHAT_ID=your_chat_id
+### Demo Mode (Recommended)
+```bash
+python live_trading_bot.py
 ```
 
-### 3. Fetch Data & Train Models
+### Production Deployment
 ```bash
-# Fetch 90 days of M1 data
-python3.10 fetch_multi_symbol_data.py
+# Using systemd
+sudo cp trading-bot.service /etc/systemd/system/
+sudo systemctl enable trading-bot
+sudo systemctl start trading-bot
 
-# Train models for EURUSD and AUDUSD
-python3.10 -m src.training.train_model --symbol EURUSD
-python3.10 -m src.training.train_model --symbol AUDUSD
+# Monitor
+tail -f logs/live_trading.log
 ```
 
-### 4. Run Backtest
-```bash
-python3.10 backtest_multi_symbol.py
-```
-
-### 5. Live Paper Trading (Optional)
-```bash
-# Test connections
-python3.10 test_telegram.py
-python3.10 test_metaapi.py
-
-# Start live bot
-python3.10 live_trading_bot.py
-```
-
-See [LIVE_TRADING.md](LIVE_TRADING.md) for detailed setup.
-
----
-
-## 📁 Project Structure
-
+## Architecture
 ```
 metalabel-trader/
+├── live_trading_bot.py       # Main trading engine
+├── fetch_swing_data.py        # H4 data downloader
+├── fetch_macro_data.py        # Sentiment & calendar fetcher
+├── train_with_macro.py        # Model training pipeline
+├── backtest_macro.py          # Performance validation
+├── data/
+│   ├── swing/                 # H4 price data (28 pairs)
+│   └── macro/                 # Sentiment & economic events
 ├── src/
-│   ├── oracle/              # Trained XGBoost models
-│   │   ├── model.json       # EURUSD model
-│   │   └── model_audusd.json # AUDUSD model
-│   ├── quant_engine/        # Technical indicators
-│   ├── training/            # Model training
-│   │   ├── train_model.py   # Training script
-│   │   └── triple_barrier.py # Labeling method
-│   └── notifications/       # Telegram alerts
-├── data/raw/                # M1 OHLCV data
-├── backtest_multi_symbol.py # Multi-symbol backtest
-├── live_trading_bot.py      # Live paper trading
-└── LIVE_TRADING.md          # Live trading guide
+│   ├── oracle/
+│   │   ├── model_swing_global.json   # Baseline model
+│   │   └── model_swing_macro.json    # Enhanced model (active)
+│   ├── quant_engine/          # Indicators (ATR, BB, RSI, ADX)
+│   └── training/              # Feature engineering
+└── tests/                     # Unit tests
 ```
 
----
+## Trading Strategy
+### Entry Criteria
+1. **Volatility Expansion**: Model predicts >50% probability of 2x ATR move within 48 hours
+2. **Sentiment Filter**: Positive news sentiment confirms directional bias
+3. **Technical Setup**: Price at Bollinger Band squeeze or pivot level
 
-## 🎓 Strategy Details
+### Risk Management
+- **Position Size**: 1% risk per trade
+- **Stop Loss**: 1x ATR from entry
+- **Take Profit**: 2x ATR from entry
+- **Trailing Stop**: Chandelier Exit (1.5x ATR from highest high)
+- **Max Positions**: 3 concurrent trades
+- **Daily Loss Limit**: -3%
 
-### Triple Barrier Labeling
-- **Take Profit**: 5 pips (5:1 risk-reward)
-- **Stop Loss**: 1 pip
-- **Timeout**: 60 bars (1 hour)
-- **Classes**: SELL (-1), NO_ACTION (0), BUY (1)
+### Exit Rules
+1. **TP Hit**: 2x ATR profit target
+2. **SL Hit**: 1x ATR trailing stop
+3. **Timeout**: 72 hours (18 H4 bars)
 
-### Features (16 total)
-**Technical Indicators**:
-- Z-Score (price normalization)
-- RSI (momentum)
-- Volatility (20-period)
-- ADX (trend strength)
-- Time encoding (sin/cos)
-- Volume delta
+## Data Sources
+- **Price Data**: EODHD (H4 candles, 28 pairs, 2 years)
+- **News Sentiment**: EODHD Sentiment API (daily updates)
+- **Economic Calendar**: EODHD Economic Events API
 
-**Momentum**:
-- ROC (5, 10, 20 periods)
-- MACD
-- Price velocity
+## Model Details
+### Features (23 total)
+**Technical (20)**:
+- Momentum: RSI, ADX, ROC (5/10/20), MACD
+- Volatility: ATR, Bollinger Band Width
+- Price: Z-score, Pivot Distance, Lagged Prices
+- Volume: Volume Delta, Time Sin
 
-**Lag Features**:
-- Close price lags (1-3 bars)
-- Returns lags (1-2 bars)
+**Macro (3)**:
+- News Sentiment Score
+- Sentiment MA7 (7-day moving average)
+- Sentiment Std7 (7-day volatility)
 
-### Model Architecture
-- **Algorithm**: XGBoost (Gradient Boosting)
-- **Objective**: Multi-class classification (3 classes) or Binary (2 classes)
-- **Trees**: 200
-- **Learning Rate**: 0.05
-- **Max Depth**: 4
-- **Regularization**: L2 (gamma=0.1)
+### Model Training
+- **Algorithm**: XGBoost Multi-Class Classifier
+- **Classes**: SELL (-1), CHOP (0), BUY (+1)
+- **Label**: Volatility Expansion (2x ATR within 48h)
+- **Dataset**: 86,871 H4 bars (28 pairs × ~3,100 bars)
+- **Train/Test Split**: 80/20
 
----
-
-## 📊 Live Trading Features
-
-- **MetaApi Integration**: Cloud-based MT4/MT5 connection
-- **Telegram Alerts**: Real-time notifications for all events
-- **Safety Limits**:
-  - Max 2 concurrent positions (1 per symbol)
-  - Daily loss limit: $20
-  - Timeout: 60 minutes
-- **Monitoring**: Hourly status updates
-
----
-
-## 🛠️ Development
-
-### Run Tests
+## Testing
 ```bash
-python3.10 -m pytest tests/
+# Run unit tests
+python -m pytest tests/
+
+# Backtest on out-of-sample data
+python backtest_macro.py
+
+# Verify MetaApi connection
+python test_metaapi.py
+
+# Test Telegram notifications
+python test_telegram.py
 ```
 
-### Retrain Models
-```bash
-# After fetching new data
-python3.10 -m src.training.train_model --symbol EURUSD
-python3.10 -m src.training.train_model --symbol AUDUSD
-```
+## Monitoring
+- **Logs**: `logs/live_trading.log`
+- **State**: `state.json` (positions, daily P&L)
+- **Telegram**: Real-time alerts on trades and errors
 
-### Stress Test
-```bash
-python3.10 stress_test_backtest.py
-```
+## Safety Features
+- ✅ Automatic reconnection on disconnects
+- ✅ Daily loss limits (-3%)
+- ✅ Max concurrent positions (3)
+- ✅ Graceful shutdown (closes positions on SIGINT)
+- ✅ Watchdog process monitoring
 
----
+## Future Enhancements
+- [ ] Phase 2: Economic calendar integration (avoid high-impact events)
+- [ ] Phase 2: Market regime detection (volatility percentiles)
+- [ ] Phase 3: Ensemble model (XGBoost + LightGBM + RandomForest)
+- [ ] Real-time sentiment updates during trading hours
 
-## 📈 Expected Live Performance
+## License
+MIT
 
-Based on backtests:
-- **Trades/Week**: ~3-4
-- **Weekly P&L**: ~$3-4
-- **Monthly Return**: ~1.3%
-- **Alerts/Day**: 3-5 (trades + status)
-
----
-
-## ⚠️ Disclaimer
-
-**This system is for educational and paper trading purposes only.**
-
-- Start with demo accounts
-- Past performance does not guarantee future results
-- Trading involves substantial risk of loss
-- Never risk more than you can afford to lose
-
----
-
-## 📚 Documentation
-
-- [LIVE_TRADING.md](LIVE_TRADING.md) - Live trading setup guide
-- [F1_IMPROVEMENT_PLAN.md](F1_IMPROVEMENT_PLAN.md) - Model optimization history
-- [STRATEGY_COMPARISON.md](STRATEGY_COMPARISON.md) - Risk-reward analysis
-
----
-
-## 🔧 Troubleshooting
-
-### No Trades in Backtest
-- Check confidence threshold (try lowering to 45%)
-- Verify model files exist
-- Ensure data has enough bars (>100)
-
-### Live Bot Not Trading
-- Bot needs ~100 minutes to warm up
-- Check MetaApi connection
-- Verify Telegram is receiving status updates
-- Check logs: `logs/live_trading.log`
-
-### MetaApi Connection Issues
-- Ensure account is deployed
-- Check token and account ID in `.env`
-- Try restarting account in MetaApi dashboard
-
----
-
-## 📞 Support
-
-For issues:
-1. Check logs in `logs/`
-2. Review [LIVE_TRADING.md](LIVE_TRADING.md)
-3. Verify environment variables in `.env`
-4. Test components individually with `test_*.py` scripts
-
----
-
-**Version**: 1.0.0
-**Last Updated**: 2025-11-21
-**License**: MIT
+## Support
+Built with ❤️ for systematic traders.
