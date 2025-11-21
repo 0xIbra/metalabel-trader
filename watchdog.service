@@ -7,7 +7,8 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/metalabel-trader
 Environment="PATH=/home/ubuntu/metalabel-trader/venv/bin:/usr/bin"
-ExecStart=/home/ubuntu/metalabel-trader/venv/bin/python watchdog.py
+# Use venv python if it exists, otherwise use system python
+ExecStart=/bin/bash -c 'if [ -d venv ]; then venv/bin/python watchdog.py; else python3 watchdog.py; fi'
 Restart=always
 RestartSec=60
 StandardOutput=append:/home/ubuntu/metalabel-trader/logs/watchdog.log
