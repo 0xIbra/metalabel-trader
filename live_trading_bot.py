@@ -33,16 +33,44 @@ from src.training.train_model import compute_roc, compute_macd, compute_price_ve
 # Load environment variables
 load_dotenv()
 
+# Custom Logging Formatter
+class CustomFormatter(logging.Formatter):
+    grey = "\x1b[38;20m"
+    green = "\x1b[32;20m"
+    yellow = "\x1b[33;20m"
+    red = "\x1b[31;20m"
+    bold_red = "\x1b[31;1m"
+    reset = "\x1b[0m"
+    format_str = "[%(asctime)s] %(levelname)-8s %(message)s"
+
+    FORMATS = {
+        logging.DEBUG: grey + format_str + reset,
+        logging.INFO: green + format_str + reset,
+        logging.WARNING: yellow + format_str + reset,
+        logging.ERROR: red + format_str + reset,
+        logging.CRITICAL: bold_red + format_str + reset
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt, datefmt='%H:%M:%S')
+        return formatter.format(record)
+
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/live_trading.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("GodmodeBot")
+logger.setLevel(logging.INFO)
+
+# Console Handler with Custom Formatter
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+ch.setFormatter(CustomFormatter())
+logger.addHandler(ch)
+
+# File Handler (Plain text)
+fh = logging.FileHandler('logs/live_trading.log')
+fh.setLevel(logging.INFO)
+fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+logger.addHandler(fh)
 
 # MetaApi config
 METAAPI_TOKEN = os.getenv('METAAPI_TOKEN')
@@ -99,6 +127,52 @@ class LiveTradingBot:
 
         # Restore state if exists
         self.load_state()
+
+    def log_trade_entry(self, symbol, side, price, size, tp, sl, conf, liq, swap):
+        """Log trade entry in a structured format"""
+        sl_pips = abs(price - sl) * (100 if 'JPY' in symbol else 10000)
+        tp_pips = abs(tp - price) * (100 if 'JPY' in symbol else 10000)
+
+        msg = (
+            f"\n🚀 ENTRY: {symbol} ({side})\n"
+            f"--------------------------------\n"
+            f"Price: {price:.5f} | Size: {size}\n"
+            f"TP:    {tp:.5f} (+{tp_pips:.1f} pips)\n"
+            f"SL:    {sl:.5f} (-{sl_pips:.1f} pips)\n"
+            f"Conf:  {conf:.2f} (Liq: {liq}, Swap: {swap})\n"
+            f"--------------------------------"
+        )
+        logger.info(msg)
+        notify_trade_entry(symbol, side, price, sl, tp)
+
+    def log_trade_exit(self, symbol, side, entry, exit_price, pnl, reason, time_held):
+        """Log trade exit in a structured format"""
+        pips = (exit_price - entry) * (100 if 'JPY' in symbol else 10000)
+        if side == 'SELL': pips = -pips
+
+        icon = "💰" if pnl > 0 else "🛑"
+
+        msg = (
+            f"\n{icon} EXIT: {symbol} ({reason})\n"
+            f"--------------------------------\n"
+            f"PnL:   €{pnl:.2f} ({pips:+.1f} pips)\n"
+            f"Time:  {int(time_held)}m\n"
+            f"--------------------------------"
+        )
+        logger.info(msg)
+        notify_trade_exit(symbol, pnl, reason)
+
+    def log_dashboard(self, balance):
+        """Log a concise dashboard summary"""
+        open_count = len(self.open_positions)
+        pnl_today = sum([t['pnl'] for t in self.trades_today])
+
+        # Only print if there's activity or every 5 mins
+        if open_count > 0 or pnl_today != 0:
+            logger.info(f"📊 STATUS | Bal: €{balance:.2f} | Open: {open_count} | Today: €{pnl_today:+.2f}")
+        else:
+            # Minimal heartbeat
+            pass
 
     def load_historical_data(self):
         """Load historical H4 data from CSVs to initialize buffers"""
@@ -539,8 +613,7 @@ class LiveTradingBot:
 
             # Place order
             try:
-                logger.info(f"🚀 ENTERING {entry_signal} {symbol} | Conf: {final_conf:.2f} | Liq: {liq_signal} | Swap: {swap_bias}")
-
+                # Execute Order
                 if entry_signal == 'BUY':
                     result = await connection.create_market_buy_order(
                         symbol=symbol,
@@ -555,6 +628,12 @@ class LiveTradingBot:
                         stop_loss=sl_price,
                         take_profit=tp_price
                     )
+
+                # Log & Notify
+                self.log_trade_entry(
+                    symbol, entry_signal, current_price, lot_size,
+                    tp_price, sl_price, final_conf, liq_signal, swap_bias
+                )
 
                 # Track position
                 self.open_positions[symbol] = {
@@ -604,7 +683,7 @@ class LiveTradingBot:
                     # Only move SL UP
                     if new_sl > position['sl']:
                         position['sl'] = new_sl
-                        logger.info(f"🔄 Trailing SL for {symbol} (BUY) to {new_sl:.5f}")
+                        logger.info(f"🔄 TRAIL: {symbol} (BUY) SL -> {new_sl:.5f}")
 
                     # Check SL Hit
                     if current_price <= position['sl']:
@@ -625,7 +704,7 @@ class LiveTradingBot:
                     # Only move SL DOWN
                     if new_sl < position['sl']:
                         position['sl'] = new_sl
-                        logger.info(f"🔄 Trailing SL for {symbol} (SELL) to {new_sl:.5f}")
+                        logger.info(f"🔄 TRAIL: {symbol} (SELL) SL -> {new_sl:.5f}")
 
                     # Check SL Hit
                     if current_price >= position['sl']:
@@ -641,7 +720,7 @@ class LiveTradingBot:
 
                     if profit_dist >= (1.0 * position['atr']):
                         # Add to position (Simulated for now)
-                        logger.info(f"🚀 Pyramiding {symbol}: Adding to winner!")
+                        logger.info(f"🚀 PYRAMID: {symbol} (+1 ATR Profit) - Adding size!")
                         position['has_added'] = True
 
                         # Move SL to Breakeven
@@ -649,12 +728,12 @@ class LiveTradingBot:
                             be_sl = position['entry_price'] + (0.1 * position['atr'])
                             if be_sl > position['sl']:
                                 position['sl'] = be_sl
-                                logger.info(f"🔒 Moved SL to Breakeven for {symbol}")
+                                logger.info(f"🔒 BREAKEVEN: {symbol} SL -> {be_sl:.5f}")
                         else:
                             be_sl = position['entry_price'] - (0.1 * position['atr'])
                             if be_sl < position['sl']:
                                 position['sl'] = be_sl
-                                logger.info(f"🔒 Moved SL to Breakeven for {symbol}")
+                                logger.info(f"🔒 BREAKEVEN: {symbol} SL -> {be_sl:.5f}")
 
                 # Check Timeout
                 time_held = (datetime.utcnow() - position['entry_time']).total_seconds() / 60
@@ -711,19 +790,20 @@ class LiveTradingBot:
 
             pnl = pips * pip_value
 
-            # Track trade
-            hold_time = int((datetime.utcnow() - position['entry_time']).total_seconds() / 60)
-            trade = {
+            # Calculate time held
+            time_held = (datetime.utcnow() - position['entry_time']).total_seconds() / 60
+
+            # Log & Notify
+            self.log_trade_exit(
+                symbol, side, position['entry_price'], exit_price,
+                pnl, reason, time_held
+            )
+
+            # Update balance (Simulated)
+            # In live mode, balance updates automatically from broker, but for tracking:
+            self.trades_today.append({
                 'symbol': symbol,
                 'pnl': pnl,
-                'pips': pips,
-                'reason': reason,
-                'timestamp': datetime.utcnow()
-            }
-            self.trades_today.append(trade)
-
-            # Get balance
-            account_info = await connection.get_account_information()
             balance = account_info['balance']
 
             # Notify
@@ -852,6 +932,10 @@ class LiveTradingBot:
 
                         # Check positions
                         await self.check_positions(connection)
+
+                        # Dashboard update
+                        account_info = await connection.get_account_information()
+                        self.log_dashboard(account_info['balance'])
 
                         # Send hourly status
                         if (datetime.utcnow() - last_status).total_seconds() >= 3600:

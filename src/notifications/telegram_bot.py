@@ -43,90 +43,83 @@ def send_telegram(message, parse_mode='HTML'):
         logger.error(f"Failed to send Telegram message: {e}")
         return False
 
-def notify_trade_entry(symbol, side, entry_price, tp_price, sl_price, lot_size, risk_amount, confidence):
+def notify_trade_entry(symbol, side, entry_price, sl_price, tp_price):
     """Notify trade entry"""
+    # Calculate pips
+    sl_pips = abs(entry_price - sl_price) * (100 if 'JPY' in symbol else 10000)
+    tp_pips = abs(tp_price - entry_price) * (100 if 'JPY' in symbol else 10000)
+
     message = f"""
-🟢 <b>TRADE OPENED</b>
-
-<b>Symbol:</b> {symbol}
-<b>Side:</b> {side}
-<b>Entry:</b> {entry_price:.5f}
-<b>TP:</b> {tp_price:.5f} (+5 pips)
-<b>SL:</b> {sl_price:.5f} (-1 pip)
-<b>Lot:</b> {lot_size:.2f}
-<b>Risk:</b> ${risk_amount:.2f}
-<b>Confidence:</b> {confidence:.1f}%
-
-<i>Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</i>
+🚀 <b>ENTRY: {symbol} ({side})</b>
+--------------------------------
+<b>Price:</b> {entry_price:.5f}
+<b>TP:</b>    {tp_price:.5f} (+{tp_pips:.1f} pips)
+<b>SL:</b>    {sl_price:.5f} (-{sl_pips:.1f} pips)
+--------------------------------
+<i>Godmode Trend Strategy</i>
 """
     return send_telegram(message.strip())
 
-def notify_trade_exit(symbol, exit_price, pnl, pips, reason, hold_time_minutes, balance):
+def notify_trade_exit(symbol, pnl, reason):
     """Notify trade exit"""
-    emoji = "✅" if pnl > 0 else "❌"
-    result = "WINNER" if pnl > 0 else "LOSER"
+    emoji = "💰" if pnl > 0 else "🛑"
+    result = "PROFIT" if pnl > 0 else "LOSS"
 
     message = f"""
-{emoji} <b>TRADE CLOSED - {result}</b>
-
-<b>Symbol:</b> {symbol}
-<b>Exit:</b> {exit_price:.5f} ({reason})
-<b>Pips:</b> {pnl/0.9:+.1f}
-<b>P&L:</b> ${pnl:+.2f}
-<b>Hold Time:</b> {hold_time_minutes} minutes
-
-<b>Account Balance:</b> ${balance:.2f} ({(pnl/1000)*100:+.2f}%)
+{emoji} <b>EXIT: {symbol} ({result})</b>
+--------------------------------
+<b>PnL:</b>    €{pnl:+.2f}
+<b>Reason:</b> {reason}
+--------------------------------
 """
     return send_telegram(message.strip())
 
 def notify_status(balance, open_positions, trades_today, pnl_today, win_rate_today):
     """Send status update"""
     message = f"""
-📊 <b>STATUS UPDATE</b>
-
-<b>Balance:</b> ${balance:.2f}
-<b>Open Positions:</b> {open_positions}
-<b>Trades Today:</b> {trades_today}
-<b>P&L Today:</b> ${pnl_today:+.2f}
-<b>Win Rate Today:</b> {win_rate_today:.1f}%
-
-<i>Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</i>
+📊 <b>HOURLY STATUS</b>
+--------------------------------
+<b>Balance:</b>  €{balance:.2f}
+<b>Open:</b>     {open_positions}
+<b>Trades:</b>   {trades_today}
+<b>PnL Today:</b> €{pnl_today:+.2f}
+<b>Win Rate:</b> {win_rate_today:.1f}%
+--------------------------------
 """
     return send_telegram(message.strip())
 
 def notify_error(error_message, action="Investigating..."):
     """Notify error"""
     message = f"""
-⚠️ <b>ERROR DETECTED</b>
-
+⚠️ <b>ERROR</b>
+--------------------------------
 <b>Message:</b> {error_message}
-<b>Action:</b> {action}
-
-<i>Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</i>
+<b>Action:</b>  {action}
+--------------------------------
 """
     return send_telegram(message.strip())
 
 def notify_startup(symbols, confidence_threshold, account_balance):
     """Notify bot startup"""
+    symbol_list = ', '.join(symbols[:5]) + f" +{len(symbols)-5} more" if len(symbols) > 5 else ', '.join(symbols)
     message = f"""
-🚀 <b>BOT STARTED</b>
-
-<b>Symbols:</b> {', '.join(symbols)}
-<b>Confidence:</b> {confidence_threshold*100:.0f}%
-<b>Account:</b> ${account_balance:.2f}
-<b>Strategy:</b> 5:1 RR (TP=5 pips, SL=1 pip)
-
-<i>Paper Trading Mode</i>
+🚀 <b>GODMODE BOT ONLINE</b>
+--------------------------------
+<b>Strategy:</b> Godmode Trend (Long+Short)
+<b>Symbols:</b>  {len(symbols)} pairs
+<b>Balance:</b>  €{account_balance:.2f}
+<b>Model:</b>    Strict OOS 2024
+--------------------------------
+<i>Live Trading Mode</i>
 """
     return send_telegram(message.strip())
 
 def notify_shutdown(reason="Manual stop"):
     """Notify bot shutdown"""
     message = f"""
-🛑 <b>BOT STOPPED</b>
-
+🛑 <b>BOT OFFLINE</b>
+--------------------------------
 <b>Reason:</b> {reason}
-
-<i>Time: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</i>
+--------------------------------
 """
     return send_telegram(message.strip())
