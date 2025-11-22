@@ -196,7 +196,7 @@ def train_global_model(data_dir="data/swing", model_path="src/oracle/model_swing
     # Train
     train_on_dataframe(full_df, model_path)
 
-def compute_features_and_labels(df):
+def compute_features_and_labels(df, currency_strength=None, symbol=None):
     """
     Refactored feature engineering logic
     """
@@ -241,6 +241,29 @@ def compute_features_and_labels(df):
     df['returns_lag1'] = df['log_returns'].shift(1)
     df['returns_lag2'] = df['log_returns'].shift(2)
 
+    # Currency Strength (if provided)
+    if currency_strength is not None and symbol is not None:
+        # Parse symbol (e.g., EURUSD -> Base: EUR, Quote: USD)
+        base = symbol[:3]
+        quote = symbol[3:]
+
+        # Get strength series
+        base_strength = currency_strength.get(base, pd.Series(0, index=df['timestamp']))
+        quote_strength = currency_strength.get(quote, pd.Series(0, index=df['timestamp']))
+
+        # Align timestamps (reindex to match df)
+        # Assuming currency_strength is a dict of Series indexed by timestamp
+        # We need to map df['timestamp'] to the strength values
+
+        # Efficient mapping
+        df['base_strength'] = df['timestamp'].map(base_strength).fillna(0)
+        df['quote_strength'] = df['timestamp'].map(quote_strength).fillna(0)
+
+        # Feature: Strength Differential
+        df['strength_diff'] = df['base_strength'] - df['quote_strength']
+    else:
+        df['strength_diff'] = 0.0
+
     df = df.dropna()
 
     # Labeling
@@ -262,7 +285,8 @@ def train_on_dataframe(df, model_path):
         'z_score', 'rsi', 'volatility', 'adx', 'time_sin', 'volume_delta',
         'bb_width', 'bb_position', 'atr_pct', 'dist_pivot',
         'roc_5', 'roc_10', 'roc_20', 'macd', 'velocity',
-        'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2'
+        'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2',
+        'strength_diff' # New Feature
     ]
 
     X = df[features]

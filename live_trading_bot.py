@@ -357,10 +357,44 @@ class LiveTradingBot:
 
             return connection
 
-        except Exception as e:
             logger.error(f"❌ MetaApi connection failed: {e}")
             notify_error(str(e), "Check MetaApi credentials")
             raise
+
+    def calculate_live_currency_strength(self):
+        """
+        Calculate live currency strength from price buffers.
+        Returns dict: {'USD': 0.5, 'EUR': -0.2, ...}
+        """
+        currency_roc = {} # {'USD': [roc1, roc2], ...}
+
+        for symbol, buffer in self.price_buffers.items():
+            if len(buffer) < 6: continue # Need at least 6 bars for ROC-5
+
+            # Get latest close and close 5 bars ago
+            current_close = buffer[-1]['close']
+            prev_close = buffer[-6]['close']
+
+            if prev_close == 0: continue
+
+            # ROC-5
+            roc = ((current_close - prev_close) / prev_close) * 100
+
+            base = symbol[:3]
+            quote = symbol[3:]
+
+            if base not in currency_roc: currency_roc[base] = []
+            if quote not in currency_roc: currency_roc[quote] = []
+
+            currency_roc[base].append(roc)
+            currency_roc[quote].append(-roc) # Inverse for quote
+
+        # Average
+        strength_map = {}
+        for currency, rocs in currency_roc.items():
+            strength_map[currency] = sum(rocs) / len(rocs)
+
+        return strength_map
 
     def compute_features(self, symbol):
         """Compute features from price buffer"""
@@ -419,13 +453,23 @@ class LiveTradingBot:
         returns_lag1 = np.roll(log_returns, 1)
         returns_lag2 = np.roll(log_returns, 2)
 
+        # Currency Strength Feature
+        strength_map = self.calculate_live_currency_strength()
+        base = symbol[:3]
+        quote = symbol[3:]
+
+        base_s = strength_map.get(base, 0.0)
+        quote_s = strength_map.get(quote, 0.0)
+        strength_diff = base_s - quote_s
+
         # Get latest features (last bar)
         # MUST MATCH train_model.py feature order exactly
         features = np.array([[
             z_score[-1], rsi[-1], volatility[-1], adx[-1], time_sin[-1], volume_delta[-1],
             bandwidth[-1], bb_position[-1], atr_pct[-1], dist_pivot[-1],
             roc_5[-1], roc_10[-1], roc_20[-1], macd[-1], velocity[-1],
-            close_lag1[-1], close_lag2[-1], close_lag3[-1], returns_lag1[-1], returns_lag2[-1]
+            close_lag1[-1], close_lag2[-1], close_lag3[-1], returns_lag1[-1], returns_lag2[-1],
+            strength_diff # New Feature
         ]])
 
         # Validate features - critical safety check
@@ -451,7 +495,8 @@ class LiveTradingBot:
             'z_score', 'rsi', 'volatility', 'adx', 'time_sin', 'volume_delta',
             'bb_width', 'bb_position', 'atr_pct', 'dist_pivot',
             'roc_5', 'roc_10', 'roc_20', 'macd', 'velocity',
-            'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2'
+            'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2',
+            'strength_diff' # New Feature
         ]
 
         dmatrix = xgb.DMatrix(features, feature_names=feature_names)

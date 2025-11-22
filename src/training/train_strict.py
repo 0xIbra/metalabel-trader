@@ -8,11 +8,57 @@ import logging
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from src.training.train_model import compute_features_and_labels
+from src.training.train_model import compute_features_and_labels, compute_roc
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("StrictTrainer")
+
+def calculate_currency_strength(files, data_dir):
+    """
+    Calculate Currency Strength Index based on average ROC of all pairs.
+    Returns a dictionary: {'USD': pd.Series, 'EUR': pd.Series, ...}
+    """
+    logger.info("Calculating Currency Strength Index...")
+
+    currency_returns = {} # {'USD': [series1, series2], ...}
+
+    for filename in files:
+        symbol = filename.split('_')[0].upper()
+        path = os.path.join(data_dir, filename)
+
+        try:
+            df = pd.read_csv(path)
+            df = df.sort_values('timestamp').reset_index(drop=True)
+
+            # Calculate ROC-5 (5-bar momentum)
+            roc = compute_roc(df['close'], period=5)
+            roc.index = df['timestamp'] # Index by timestamp
+
+            base = symbol[:3]
+            quote = symbol[3:]
+
+            if base not in currency_returns: currency_returns[base] = []
+            if quote not in currency_returns: currency_returns[quote] = []
+
+            # Base strength = ROC
+            currency_returns[base].append(roc)
+
+            # Quote strength = -ROC (Inverse)
+            currency_returns[quote].append(-roc)
+
+        except Exception as e:
+            logger.error(f"Error processing {symbol} for strength: {e}")
+
+    # Aggregate
+    strength_map = {}
+    for currency, series_list in currency_returns.items():
+        # Concat and group by index (timestamp) to average
+        combined = pd.concat(series_list, axis=1)
+        strength_map[currency] = combined.mean(axis=1)
+
+    logger.info(f"Calculated strength for: {list(strength_map.keys())}")
+    return strength_map
 
 def train_strict_model(data_dir="data/swing", model_path="src/oracle/model_strict_2024.json", split_date_ts=1735689600):
     """
@@ -22,6 +68,9 @@ def train_strict_model(data_dir="data/swing", model_path="src/oracle/model_stric
     logger.info(f"Training Data Cutoff: {split_date_ts} (Jan 1, 2025)")
 
     all_files = [f for f in os.listdir(data_dir) if f.endswith('_h4.csv')]
+
+    # 1. Pre-calculate Currency Strength
+    currency_strength = calculate_currency_strength(all_files, data_dir)
 
     train_dfs = []
     test_dfs = []
@@ -35,8 +84,8 @@ def train_strict_model(data_dir="data/swing", model_path="src/oracle/model_stric
             df = df.sort_values('timestamp').reset_index(drop=True)
             df.columns = [c.lower() for c in df.columns]
 
-            # Compute features
-            df = compute_features_and_labels(df)
+            # Compute features WITH Currency Strength
+            df = compute_features_and_labels(df, currency_strength, symbol)
 
             # Split by Date
             train_subset = df[df['timestamp'] < split_date_ts].copy()
@@ -62,12 +111,13 @@ def train_strict_model(data_dir="data/swing", model_path="src/oracle/model_stric
     logger.info(f"Training Set: {len(full_train_df)} samples")
     logger.info(f"Test Set: {len(full_test_df)} samples")
 
-    # Features
+    # Features (21 Features)
     features = [
         'z_score', 'rsi', 'volatility', 'adx', 'time_sin', 'volume_delta',
         'bb_width', 'bb_position', 'atr_pct', 'dist_pivot',
         'roc_5', 'roc_10', 'roc_20', 'macd', 'velocity',
-        'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2'
+        'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2',
+        'strength_diff' # New Feature
     ]
 
     X_train = full_train_df[features]

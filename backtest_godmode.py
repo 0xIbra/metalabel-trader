@@ -59,6 +59,10 @@ def backtest_godmode_strategy(
         'EURAUD', 'EURNZD', 'EURCHF', 'GBPNZD', 'AUDNZD', 'GBPCAD', 'NZDCAD', 'NZDCHF', 'USDCAD'  # Other Crosses
     ]
 
+    # Pre-calculate Currency Strength
+    from src.training.train_strict import calculate_currency_strength
+    currency_strength = calculate_currency_strength(files, data_dir)
+
     all_trades = []
     symbol_data = {}
 
@@ -78,8 +82,8 @@ def backtest_godmode_strategy(
             df.columns = [c.lower() for c in df.columns]
             df = df.sort_values('timestamp').reset_index(drop=True)
 
-            # Compute features
-            df = compute_features_and_labels(df)
+            # Compute features WITH Currency Strength
+            df = compute_features_and_labels(df, currency_strength, symbol)
 
             # Use full dataframe (filtering happens by date later)
             test_df = df.copy()
@@ -89,7 +93,8 @@ def backtest_godmode_strategy(
                 'z_score', 'rsi', 'volatility', 'adx', 'time_sin', 'volume_delta',
                 'bb_width', 'bb_position', 'atr_pct', 'dist_pivot',
                 'roc_5', 'roc_10', 'roc_20', 'macd', 'velocity',
-                'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2'
+                'close_lag1', 'close_lag2', 'close_lag3', 'returns_lag1', 'returns_lag2',
+                'strength_diff' # New Feature
             ]
 
             # Ensure features exist
