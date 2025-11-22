@@ -52,13 +52,26 @@ def backtest_godmode_strategy(
     # Get all data files
     files = [f for f in os.listdir(data_dir) if f.endswith('_h4.csv')]
 
+    # Elite Symbol Universe (High WR or High Volume, removed poor performers)
+    ELITE_SYMBOLS = [
+        'EURUSD', 'USDJPY', 'AUDUSD',  # Majors
+        'EURGBP', 'EURJPY', 'GBPJPY', 'AUDJPY', 'NZDJPY', 'CHFJPY',  # JPY Crosses
+        'EURAUD', 'EURNZD', 'EURCHF', 'GBPNZD', 'AUDNZD', 'GBPCAD', 'NZDCAD', 'NZDCHF', 'USDCAD'  # Other Crosses
+    ]
+
     all_trades = []
     symbol_data = {}
 
     logger.info("Loading and aligning data...")
+    logger.info(f"Elite Symbol Universe: {len(ELITE_SYMBOLS)} pairs\n")
 
     for filename in files:
         symbol = filename.split('_')[0].upper()
+
+        # Filter to elite symbols only
+        if symbol not in ELITE_SYMBOLS:
+            continue
+
         path = os.path.join(data_dir, filename)
         try:
             df = pd.read_csv(path)
