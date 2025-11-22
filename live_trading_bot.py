@@ -804,19 +804,10 @@ class LiveTradingBot:
             self.trades_today.append({
                 'symbol': symbol,
                 'pnl': pnl,
-            balance = account_info['balance']
+                'time': datetime.utcnow()
+            })
 
-            # Notify
-            notify_trade_exit(
-                symbol, exit_price, pnl, pips, reason, hold_time, balance
-            )
-
-            logger.info(f"💰 Closed {symbol} @ {exit_price:.5f} | P&L: ${pnl:+.2f} ({reason})")
-
-            # Remove position
             del self.open_positions[symbol]
-
-            # Save state immediately
             self.save_state()
 
         except Exception as e:
