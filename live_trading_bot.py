@@ -137,12 +137,12 @@ class LiveTradingBot:
                 model = xgb.Booster()
                 model.load_model(MODEL_PATH)
                 self.model = model # Single global model
-                logger.info(f"✅ Loaded global model from {model_path}")
+                logger.info(f"✅ Loaded global model from {MODEL_PATH}")
             except Exception as e:
                 logger.error(f"❌ Failed to load global model: {e}")
                 raise
         else:
-            logger.error(f"❌ Model not found: {model_path}")
+            logger.error(f"❌ Model not found: {MODEL_PATH}")
             raise Exception("Global model not found!")
 
     def save_state(self):
@@ -865,14 +865,10 @@ class LiveTradingBot:
         # Save final state
         self.save_state()
 
-        # Close any open positions on shutdown
-        if connection and self.open_positions:
-            logger.warning("Closing open positions on shutdown...")
-            for symbol in list(self.open_positions.keys()):
-                try:
-                    await self.close_position(connection, symbol, "BOT_SHUTDOWN")
-                except Exception as e:
-                    logger.error(f"Failed to close {symbol} on shutdown: {e}")
+        # Log open positions (don't try to close on shutdown to avoid async issues)
+        if self.open_positions:
+            logger.warning(f"⚠️ {len(self.open_positions)} position(s) open at shutdown: {list(self.open_positions.keys())}")
+            logger.info("Positions saved to state.json and will be restored on restart")
 
         logger.info("🛑 Bot stopped")
 
