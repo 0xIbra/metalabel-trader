@@ -393,6 +393,19 @@ class LiveTradingBot:
             logger.warning(f"Max daily trades reached: {len(self.trades_today)}")
             return
 
+        # Check account balance ONCE before looping symbols
+        try:
+            account_info = await connection.get_account_information()
+            current_balance = account_info['balance']
+
+            if current_balance < 100:  # Minimum balance check
+                logger.error(f"Insufficient balance: ${current_balance:.2f}")
+                notify_error(f"Balance too low: ${current_balance:.2f}", "Add funds to account")
+                return
+        except Exception as e:
+            logger.error(f"Failed to get account info: {e}")
+            return
+
         for symbol in SYMBOLS:
             # Skip if already in position
             if symbol in self.open_positions:
@@ -407,19 +420,6 @@ class LiveTradingBot:
             if daily_pnl <= -DAILY_LOSS_LIMIT:
                 logger.warning(f"Daily loss limit reached: ${daily_pnl:.2f}")
                 return
-
-            # Check account balance
-            try:
-                account_info = await connection.get_account_information()
-                current_balance = account_info['balance']
-
-                if current_balance < 100:  # Minimum balance check
-                    logger.error(f"Insufficient balance: ${current_balance:.2f}")
-                    notify_error(f"Balance too low: ${current_balance:.2f}", "Add funds to account")
-                    return
-            except Exception as e:
-                logger.error(f"Failed to get account info: {e}")
-                continue
 
             # Compute features
             features = self.compute_features(symbol)
