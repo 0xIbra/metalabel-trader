@@ -542,6 +542,9 @@ class LiveTradingBot:
                 logger.error(f"Failed to open {symbol}: {e}")
                 notify_error(f"Failed to open {symbol}", str(e))
 
+            # Yield control to event loop to allow WebSocket heartbeats
+            await asyncio.sleep(0)
+
     async def check_positions(self, connection):
         """Check and manage open positions (Trailing Stop & Pyramiding)"""
         for symbol in list(self.open_positions.keys()):
@@ -616,6 +619,9 @@ class LiveTradingBot:
 
             except Exception as e:
                 logger.error(f"Error managing position {symbol}: {e}")
+
+            # Yield control to event loop
+            await asyncio.sleep(0)
 
     async def close_position(self, connection, symbol, reason):
         """Close a position"""
