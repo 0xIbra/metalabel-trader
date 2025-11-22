@@ -25,6 +25,7 @@ INITIAL_BALANCE = 25000.0
 LEVERAGE = 50.0
 RISK_PER_TRADE = 0.05  # 5%
 CONFIDENCE_THRESHOLD = 0.50
+MAX_OPEN_POSITIONS = 10  # Max concurrent trades
 
 # === STRATEGY PARAMS ===
 MIN_TP_PIPS = 100
@@ -324,6 +325,10 @@ def backtest_godmode_strategy(
 
         # 2. Check Entry (if no position)
         else:
+            # Max Positions Check
+            if len(positions) >= MAX_OPEN_POSITIONS:
+                continue
+
             # Godmode Logic
             df = symbol_data[sym]
             idx = step['idx']
