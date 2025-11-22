@@ -129,8 +129,8 @@ class LiveTradingBot:
         """Load Global XGBoost model"""
         logger.info("Loading global model...")
 
-       # Model path - using macro-enhanced model
-        MODEL_PATH = "src/oracle/model_swing_macro.json"
+       # Model path - using strict OOS validated model
+        MODEL_PATH = "src/oracle/model_strict_2024.json"
 
         if os.path.exists(MODEL_PATH):
             try:
@@ -334,9 +334,7 @@ class LiveTradingBot:
             z_score[-1], rsi[-1], volatility[-1], adx[-1], time_sin[-1], volume_delta[-1],
             bandwidth[-1], bb_position[-1], atr_pct[-1], dist_pivot[-1],
             roc_5[-1], roc_10[-1], roc_20[-1], macd[-1], velocity[-1],
-            close_lag1[-1], close_lag2[-1], close_lag3[-1], returns_lag1[-1], returns_lag2[-1],
-            # Macro features (placeholder - TODO: integrate live sentiment)
-            0.0, 0.0, 0.0  # sentiment, sentiment_ma7, sentiment_std7
+            close_lag1[-1], close_lag2[-1], close_lag3[-1], returns_lag1[-1], returns_lag2[-1]
         ]])
 
         # Validate features - critical safety check
@@ -370,15 +368,16 @@ class LiveTradingBot:
         dmatrix = xgb.DMatrix(features, feature_names=feature_names)
         predictions = self.model.predict(dmatrix)
 
-        # Get BUY probability (3-class model)
-        # Classes: 0=SELL, 1=CHOP, 2=BUY
+        # Get probabilities (3-class model: 0=SELL, 1=CHOP, 2=BUY)
         if len(predictions.shape) > 1 and predictions.shape[1] == 3:
-            buy_prob = predictions[0][2]  # BUY class
+            sell_prob = float(predictions[0][0])
+            buy_prob = float(predictions[0][2])
         else:
             # Fallback if binary
-            buy_prob = predictions[0]
+            buy_prob = float(predictions[0])
+            sell_prob = 0.0
 
-        return buy_prob
+        return {'buy': buy_prob, 'sell': sell_prob}
 
     async def check_signals(self, connection):
         """Check for trading signals"""
@@ -427,14 +426,15 @@ class LiveTradingBot:
                 continue
 
             # Get prediction
-            confidence = self.get_prediction(symbol, features)
+            probs = self.get_prediction(symbol, features)
+            buy_conf = probs['buy']
+            sell_conf = probs['sell']
 
             # --- GODMODE ENHANCEMENTS ---
 
             # 1. Liquidity Grab Detection (The "Stop-Hunt" Game)
-            # We need the price buffer to detect swings
             buffer_df = pd.DataFrame(list(self.price_buffers[symbol]))
-            if len(buffer_df) < 22: continue # Need window + 1
+            if len(buffer_df) < 22: continue
 
             high_arr = buffer_df['high'].values
             low_arr = buffer_df['low'].values
@@ -446,28 +446,47 @@ class LiveTradingBot:
             swap_bias = get_swap_bias(symbol)
 
             # Adjust Confidence based on Godmode factors
-            adjusted_confidence = confidence
 
-            # Boost for Bullish Liquidity Grab
-            if liq_signal == 1:
-                logger.info(f"💎 GODMODE: Bullish Liquidity Grab detected on {symbol}!")
-                adjusted_confidence += 0.2 # Significant boost
+            # --- BUY CONFIDENCE ---
+            adj_buy_conf = buy_conf
+            if liq_signal == 1: adj_buy_conf += 0.2 # Bullish Grab
+            if swap_bias == -1: adj_buy_conf -= 0.1 # Penalty for Short Bias
+            elif swap_bias == 1: adj_buy_conf += 0.05 # Boost for Long Bias
 
-            # Penalty for Negative Carry (trading against the house)
-            if swap_bias == -1:
-                logger.info(f"⚠️ Negative Swap Bias for {symbol}. Penalizing confidence.")
-                adjusted_confidence -= 0.1
-            elif swap_bias == 1:
-                 adjusted_confidence += 0.05 # Small boost for positive carry
+            # --- SELL CONFIDENCE ---
+            adj_sell_conf = sell_conf
+            if liq_signal == -1: adj_sell_conf += 0.2 # Bearish Grab
+            if swap_bias == -1: adj_sell_conf += 0.05 # Boost for Short Bias
+            elif swap_bias == 1: adj_sell_conf -= 0.1 # Penalty for Long Bias
 
-            # Check threshold
-            if adjusted_confidence < CONFIDENCE_THRESHOLD:
+            # Decision
+            entry_signal = None
+            final_conf = 0.0
+
+            if adj_buy_conf >= CONFIDENCE_THRESHOLD:
+                entry_signal = 'BUY'
+                final_conf = adj_buy_conf
+            elif adj_sell_conf >= CONFIDENCE_THRESHOLD:
+                entry_signal = 'SELL'
+                final_conf = adj_sell_conf
+
+            # If both (rare), pick higher confidence
+            if adj_buy_conf >= CONFIDENCE_THRESHOLD and adj_sell_conf >= CONFIDENCE_THRESHOLD:
+                if adj_buy_conf > adj_sell_conf:
+                    entry_signal = 'BUY'
+                    final_conf = adj_buy_conf
+                else:
+                    entry_signal = 'SELL'
+                    final_conf = adj_sell_conf
+
+            if not entry_signal:
                 continue
 
             # Get current price
             try:
                 price = await connection.get_symbol_price(symbol)
-                current_price = price['ask']
+                # Ask for BUY, Bid for SELL
+                current_price = price['ask'] if entry_signal == 'BUY' else price['bid']
             except Exception as e:
                 logger.error(f"Failed to get price for {symbol}: {e}")
                 continue
@@ -480,25 +499,27 @@ class LiveTradingBot:
 
             # --- GODMODE RISK MANAGEMENT ---
             # Trend Rider Logic (ADX > 25)
-            # We need ADX from features.
-            # Features index 3 is ADX (based on compute_features)
-            # [z_score, rsi, volatility, adx, ...]
             adx_val = features[0][3]
 
             if adx_val > 25:
                 # Strong Trend: Ride it!
                 logger.info(f"🌊 TREND MODE: ADX {adx_val:.1f} > 25. Extending targets!")
-                tp_dist = 10.0 * current_atr
+                tp_mult = 10.0
                 trail_mult = 3.0
             else:
                 # Normal Swing
-                tp_dist = 3.0 * current_atr
+                tp_mult = 3.0
                 trail_mult = 2.5
 
             sl_dist = 1.0 * current_atr
+            tp_dist = tp_mult * current_atr
 
-            tp_price = current_price + tp_dist
-            sl_price = current_price - sl_dist
+            if entry_signal == 'BUY':
+                tp_price = current_price + tp_dist
+                sl_price = current_price - sl_dist
+            else: # SELL
+                tp_price = current_price - tp_dist
+                sl_price = current_price + sl_dist
 
             # Calculate lot size dynamically based on balance and risk
             # Risk 5% of account (Godmode Trend)
@@ -518,25 +539,37 @@ class LiveTradingBot:
 
             # Place order
             try:
-                logger.info(f"🚀 ENTERING TRADE {symbol} | Conf: {confidence:.2f}->{adjusted_confidence:.2f} | Liq: {liq_signal} | Swap: {swap_bias}")
-                result = await connection.create_market_buy_order(
-                    symbol=symbol,
-                    volume=lot_size,
-                    stop_loss=sl_price,
-                    take_profit=tp_price
-                )
+                logger.info(f"🚀 ENTERING {entry_signal} {symbol} | Conf: {final_conf:.2f} | Liq: {liq_signal} | Swap: {swap_bias}")
+
+                if entry_signal == 'BUY':
+                    result = await connection.create_market_buy_order(
+                        symbol=symbol,
+                        volume=lot_size,
+                        stop_loss=sl_price,
+                        take_profit=tp_price
+                    )
+                else: # SELL
+                    result = await connection.create_market_sell_order(
+                        symbol=symbol,
+                        volume=lot_size,
+                        stop_loss=sl_price,
+                        take_profit=tp_price
+                    )
 
                 # Track position
                 self.open_positions[symbol] = {
+                    'side': entry_signal,
                     'entry_time': datetime.utcnow(),
                     'entry_price': current_price,
                     'sl': sl_price,
                     'tp': tp_price,
                     'atr': current_atr,
-                    'highest_high': current_price, # For trailing stop
+                    'highest_high': current_price if entry_signal == 'BUY' else 0,
+                    'lowest_low': current_price if entry_signal == 'SELL' else 999999,
                     'has_added': False,
                     'trail_mult': trail_mult, # Dynamic Trailing Stop Multiplier
-                    'order_id': result['orderId'] if 'orderId' in result else 'mock_id'
+                    'order_id': result['orderId'] if 'orderId' in result else 'mock_id',
+                    'lot_size': lot_size
                 }
             except Exception as e:
                 logger.error(f"Failed to open {symbol}: {e}")
@@ -549,66 +582,79 @@ class LiveTradingBot:
         """Check and manage open positions (Trailing Stop & Pyramiding)"""
         for symbol in list(self.open_positions.keys()):
             position = self.open_positions[symbol]
+            side = position.get('side', 'BUY')
 
             try:
                 # Get current price
                 price_info = await connection.get_symbol_price(symbol)
-                current_price = price_info['bid'] # Exit price for BUY
+                # Exit price: Bid for BUY, Ask for SELL
+                current_price = price_info['bid'] if side == 'BUY' else price_info['ask']
 
-                # Update Highest High
-                if current_price > position['highest_high']:
-                    position['highest_high'] = current_price
+                # --- BUY MANAGEMENT ---
+                if side == 'BUY':
+                    # Update Highest High
+                    if current_price > position['highest_high']:
+                        position['highest_high'] = current_price
 
-                # --- TRAILING STOP (Chandelier Exit) ---
-                # Trail by 3 * ATR from Highest High
-                # Or tighter trail: 1.5 * ATR to lock profits?
-                # Plan says: "Chandelier Exit (Trail stop by 3x ATR from highest high)"
-                # But initial SL is 1x ATR. 3x ATR trail would be below initial SL immediately.
-                # Let's use 1.5x ATR trail to secure profit once it moves.
+                    # Trailing Stop
+                    trail_mult = position.get('trail_mult', 2.5)
+                    trail_dist = trail_mult * position['atr']
+                    new_sl = position['highest_high'] - trail_dist
 
-                # Trail by dynamic multiplier (Trend Rider: 3.0, Normal: 2.5)
-                trail_mult = position.get('trail_mult', 2.5)
-                trail_dist = trail_mult * position['atr']
-                new_sl = position['highest_high'] - trail_dist
+                    # Only move SL UP
+                    if new_sl > position['sl']:
+                        position['sl'] = new_sl
+                        logger.info(f"🔄 Trailing SL for {symbol} (BUY) to {new_sl:.5f}")
 
-                # Only move SL UP
-                if new_sl > position['sl']:
-                    # Update SL on broker
-                    # Note: MetaApi modification might fail if too close to price
-                    # For now, we just update internal SL and close if hit
-                    position['sl'] = new_sl
-                    logger.info(f"🔄 Trailing SL for {symbol} to {new_sl:.5f}")
+                    # Check SL Hit
+                    if current_price <= position['sl']:
+                        await self.close_position(connection, symbol, 'SL_HIT')
+                        continue
 
-                    # Ideally send modify_position request to broker here
-                    # await connection.modify_position(position['order_id'], stop_loss=new_sl, take_profit=position['tp'])
+                # --- SELL MANAGEMENT ---
+                else: # SELL
+                    # Update Lowest Low
+                    if current_price < position['lowest_low']:
+                        position['lowest_low'] = current_price
 
-                # Check SL Hit (Internal)
-                if current_price <= position['sl']:
-                    await self.close_position(connection, symbol, 'SL_HIT')
-                    continue
+                    # Trailing Stop (Above price)
+                    trail_mult = position.get('trail_mult', 2.5)
+                    trail_dist = trail_mult * position['atr']
+                    new_sl = position['lowest_low'] + trail_dist
+
+                    # Only move SL DOWN
+                    if new_sl < position['sl']:
+                        position['sl'] = new_sl
+                        logger.info(f"🔄 Trailing SL for {symbol} (SELL) to {new_sl:.5f}")
+
+                    # Check SL Hit
+                    if current_price >= position['sl']:
+                        await self.close_position(connection, symbol, 'SL_HIT')
+                        continue
 
                 # --- PYRAMIDING (Add-On) ---
-                # Add 0.5% risk if price moves +1 ATR favorable
                 if not position['has_added']:
-                    profit_dist = current_price - position['entry_price']
+                    if side == 'BUY':
+                        profit_dist = current_price - position['entry_price']
+                    else:
+                        profit_dist = position['entry_price'] - current_price
+
                     if profit_dist >= (1.0 * position['atr']):
-                        # Add to position
+                        # Add to position (Simulated for now)
                         logger.info(f"🚀 Pyramiding {symbol}: Adding to winner!")
-
-                        # Calculate add-on size (0.5% risk)
-                        # New SL will be at Breakeven of first trade?
-                        # Let's just open a new separate order for simplicity of tracking
-                        # But `open_positions` structure assumes 1 pos per symbol.
-                        # For now, we just log it and maybe skip actual execution to keep it simple
-                        # until we support multi-position tracking.
-                        # OR: Just update the 'has_added' flag and maybe move SL to BE.
-
                         position['has_added'] = True
-                        # Move SL to Breakeven + small buffer
-                        be_sl = position['entry_price'] + (0.1 * position['atr'])
-                        if be_sl > position['sl']:
-                            position['sl'] = be_sl
-                            logger.info(f"🔒 Moved SL to Breakeven for {symbol}")
+
+                        # Move SL to Breakeven
+                        if side == 'BUY':
+                            be_sl = position['entry_price'] + (0.1 * position['atr'])
+                            if be_sl > position['sl']:
+                                position['sl'] = be_sl
+                                logger.info(f"🔒 Moved SL to Breakeven for {symbol}")
+                        else:
+                            be_sl = position['entry_price'] - (0.1 * position['atr'])
+                            if be_sl < position['sl']:
+                                position['sl'] = be_sl
+                                logger.info(f"🔒 Moved SL to Breakeven for {symbol}")
 
                 # Check Timeout
                 time_held = (datetime.utcnow() - position['entry_time']).total_seconds() / 60
@@ -629,11 +675,13 @@ class LiveTradingBot:
             return
 
         position = self.open_positions[symbol]
+        side = position.get('side', 'BUY')
 
         try:
             # Get current price
             price = await connection.get_symbol_price(symbol)
-            exit_price = price['bid']
+            # Exit price: Bid for BUY (Sell to close), Ask for SELL (Buy to close)
+            exit_price = price['bid'] if side == 'BUY' else price['ask']
 
             # Close position
             try:
@@ -648,7 +696,11 @@ class LiveTradingBot:
 
             # Calculate P&L correctly
             pip_size = 0.0001 if symbol != 'USDJPY' else 0.01
-            pips = (exit_price - position['entry_price']) / pip_size
+
+            if side == 'BUY':
+                pips = (exit_price - position['entry_price']) / pip_size
+            else: # SELL
+                pips = (position['entry_price'] - exit_price) / pip_size
 
             # Correct pip value calculation
             lot_size = position['lot_size']
