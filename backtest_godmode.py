@@ -20,13 +20,45 @@ from src.quant_engine.godmode import detect_liquidity_grab, get_swap_bias
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger("GodmodeBacktest")
 
+# === CONFIGURATION ===
+INITIAL_BALANCE = 25000.0
+LEVERAGE = 50.0
+RISK_PER_TRADE = 0.05  # 5%
+CONFIDENCE_THRESHOLD = 0.50
+
+# === STRATEGY PARAMS ===
+MIN_TP_PIPS = 100
+TRAIL_MULT_DEFAULT = 2.5
+TRAIL_MULT_STRONG = 3.0
+TP_MULT_DEFAULT = 3.0
+TP_MULT_STRONG = 10.0
+ADX_STRONG_THRESHOLD = 25
+TIMEOUT_HOURS = 72
+
+# === EXECUTION COSTS ===
+SPREAD_MAJORS = 1.5
+SPREAD_CROSSES = 3.0
+SLIPPAGE_PIPS = 0.5
+COMMISSION_PER_LOT = 6.0
+SWAP_PIPS_PER_NIGHT = -1.0
+SWAP_WEDNESDAY_MULT = 1.2  # Average multiplier for triple swap
+VOLATILITY_SPREAD_MULT = 3.0
+
+# === ASSETS ===
+ELITE_SYMBOLS = [
+    'EURUSD', 'USDJPY', 'AUDUSD',  # Majors
+    'EURGBP', 'EURJPY', 'GBPJPY', 'AUDJPY', 'NZDJPY', 'CHFJPY',  # JPY Crosses
+    'EURAUD', 'EURNZD', 'EURCHF', 'GBPNZD', 'AUDNZD', 'GBPCAD', 'NZDCAD', 'NZDCHF', 'USDCAD'  # Other Crosses
+]
+MAJORS = ['EURUSD', 'USDJPY', 'AUDUSD']
+
 def backtest_godmode_strategy(
     data_dir="data/swing",
     model_path="src/oracle/model_strict_2024.json",
-    confidence_threshold=0.50,
+    confidence_threshold=CONFIDENCE_THRESHOLD,
     test_split=0.5,
-    initial_balance=1000.0,
-    leverage=30.0
+    initial_balance=INITIAL_BALANCE,
+    leverage=LEVERAGE
 ):
     """
     Backtest the Godmode swing trading strategy with specific account params
@@ -50,14 +82,10 @@ def backtest_godmode_strategy(
         return None
 
     # Get all data files
-    files = [f for f in os.listdir(data_dir) if f.endswith('_h4.csv')]
+    files = sorted([f for f in os.listdir(data_dir) if f.endswith('_h4.csv')])
 
     # Elite Symbol Universe (High WR or High Volume, removed poor performers)
-    ELITE_SYMBOLS = [
-        'EURUSD', 'USDJPY', 'AUDUSD',  # Majors
-        'EURGBP', 'EURJPY', 'GBPJPY', 'AUDJPY', 'NZDJPY', 'CHFJPY',  # JPY Crosses
-        'EURAUD', 'EURNZD', 'EURCHF', 'GBPNZD', 'AUDNZD', 'GBPCAD', 'NZDCAD', 'NZDCHF', 'USDCAD'  # Other Crosses
-    ]
+    # Uses global ELITE_SYMBOLS
 
     # Pre-calculate Currency Strength
     from src.training.train_strict import calculate_currency_strength
@@ -134,20 +162,32 @@ def backtest_godmode_strategy(
     # 1735689600 = 2025-01-01 00:00:00 UTC
     timeline = [x for x in timeline if x['timestamp'] >= 1735689600]
 
-    logger.info(f"Simulating {len(timeline)} bars across {len(symbol_data)} symbols (2025 OOS)...")
+    logger.info(f"Simulating {len(timeline)} bars across {len(symbol_data)} symbols (2025 Full Year with Realistic Costs)...")
 
     # Simulation State
     balance = initial_balance
     positions = {} # symbol -> {entry_price, size, sl, tp, entry_time}
 
+    # Monthly Tracking
+    from datetime import datetime as dt
+    monthly_balances = {}
+    current_month = None
+
     # Aggressive Risk Params
-    RISK_PER_TRADE = 0.03 # 3%
-    MIN_TP_PIPS = 100
+    # Aggressive Risk Params
+    # Uses global RISK_PER_TRADE and MIN_TP_PIPS
 
     for step in timeline:
         ts = step['timestamp']
         sym = step['symbol']
         row = step['data']
+
+        # Track monthly balance
+        month_str = dt.utcfromtimestamp(ts).strftime('%Y-%m')
+        if month_str != current_month:
+            if current_month is not None:
+                monthly_balances[current_month] = balance
+            current_month = month_str
 
         current_price = row['close']
         high = row['high']
@@ -180,7 +220,7 @@ def backtest_godmode_strategy(
                 elif low <= pos['sl']:
                     exit_reason = 'SL'
                     exit_price = pos['sl']
-                elif (ts - pos['entry_time']) > (72 * 3600): # 72 hours
+                elif (ts - pos['entry_time']) > (TIMEOUT_HOURS * 3600): # Timeout
                     exit_reason = 'TIMEOUT'
 
             # --- SELL MANAGEMENT ---
@@ -207,10 +247,27 @@ def backtest_godmode_strategy(
                 elif high >= pos['sl']:
                     exit_reason = 'SL'
                     exit_price = pos['sl']
-                elif (ts - pos['entry_time']) > (72 * 3600): # 72 hours
+                elif (ts - pos['entry_time']) > (TIMEOUT_HOURS * 3600): # Timeout
                     exit_reason = 'TIMEOUT'
 
             if exit_reason:
+                # === EXIT COSTS ===
+                # Spread on exit (same as entry)
+                if sym in MAJORS:
+                    spread_pips = SPREAD_MAJORS
+                else:
+                    spread_pips = SPREAD_CROSSES
+
+                slippage_pips = SLIPPAGE_PIPS
+                pip_size = 0.01 if 'JPY' in sym else 0.0001
+                exit_cost = (spread_pips + slippage_pips) * pip_size
+
+                # Adjust exit price for spread/slippage
+                if side == 'BUY':
+                    exit_price = exit_price - exit_cost  # Receive Bid - slippage
+                else:
+                    exit_price = exit_price + exit_cost  # Receive Ask + slippage (worse for short)
+
                 # Calculate PnL
                 if side == 'BUY':
                     raw_pnl = (exit_price - pos['entry_price']) * pos['size'] * 100000
@@ -221,6 +278,37 @@ def backtest_godmode_strategy(
                     raw_pnl = raw_pnl / 160.0
                 elif 'USD' in sym and sym.endswith('USD'):
                     raw_pnl = raw_pnl / 1.05
+
+                # Commission ($6 per lot round-trip)
+                commission_usd = pos['size'] * COMMISSION_PER_LOT
+                commission_eur = commission_usd / 1.05
+                raw_pnl -= commission_eur
+
+                # === SWAP COSTS (Overnight Fees) ===
+                # Calculate nights held
+                entry_dt = dt.utcfromtimestamp(pos['entry_time'])
+                exit_dt = dt.utcfromtimestamp(ts)
+                nights_held = (exit_dt.date() - entry_dt.date()).days
+
+                if nights_held > 0:
+                    # Assume -1 pip per night (conservative average for retail)
+                    swap_pips_per_night = SWAP_PIPS_PER_NIGHT
+
+                    # Triple swap on Wednesday (standard Forex practice)
+                    # We'll just average it to -1.2 pips/night to be simple & safe
+                    avg_swap_cost_pips = abs(SWAP_PIPS_PER_NIGHT) * SWAP_WEDNESDAY_MULT * nights_held
+
+                    pip_val = 0.01 if 'JPY' in sym else 0.0001
+                    swap_cost_price = avg_swap_cost_pips * pip_val
+
+                    swap_cost_eur = swap_cost_price * pos['size'] * 100000
+
+                    if 'JPY' in sym:
+                        swap_cost_eur /= 160.0
+                    elif 'USD' in sym and sym.endswith('USD'):
+                        swap_cost_eur /= 1.05
+
+                    raw_pnl -= swap_cost_eur
 
                 balance += raw_pnl
 
@@ -298,14 +386,14 @@ def backtest_godmode_strategy(
                 # Trend Rider Logic
                 adx = row['adx']
 
-                if adx > 25:
+                if adx > ADX_STRONG_THRESHOLD:
                     # Strong Trend
-                    tp_mult = 10.0
-                    trail_mult = 3.0
+                    tp_mult = TP_MULT_STRONG
+                    trail_mult = TRAIL_MULT_STRONG
                 else:
                     # Normal Swing
-                    tp_mult = 3.0
-                    trail_mult = 2.5
+                    tp_mult = TP_MULT_DEFAULT
+                    trail_mult = TRAIL_MULT_DEFAULT
 
                 sl_dist = 1.0 * atr
                 tp_dist = tp_mult * atr
@@ -317,9 +405,36 @@ def backtest_godmode_strategy(
                     sl_price = current_price + sl_dist
                     tp_price = current_price - tp_dist
 
-                # Risk 5% of Balance
-                RISK_PER_TRADE = 0.05
+                # Risk % of Balance
                 risk_eur = balance * RISK_PER_TRADE
+
+                # === REALISTIC EXECUTION COSTS ===
+                # 1. Variable Spread (News/Volatility Penalty)
+                # If ATR is high (volatile), spread widens
+                base_spread = SPREAD_MAJORS if sym in MAJORS else SPREAD_CROSSES
+
+                # Volatility multiplier: if current bar range > 2x ATR, triple the spread
+                bar_range = high - low
+                if bar_range > (2.0 * atr):
+                    spread_pips = base_spread * VOLATILITY_SPREAD_MULT
+                else:
+                    spread_pips = base_spread
+
+                # 2. Slippage (in pips)
+                slippage_pips = SLIPPAGE_PIPS
+
+                # Total entry cost
+                total_entry_cost_pips = spread_pips + slippage_pips
+
+                # Convert pips to price
+                pip_size = 0.01 if 'JPY' in sym else 0.0001
+                entry_cost = total_entry_cost_pips * pip_size
+
+                # Adjust entry price for spread/slippage
+                if entry_signal == 'BUY':
+                    entry_price = current_price + entry_cost  # Pay Ask + slippage
+                else:
+                    entry_price = current_price - entry_cost  # Pay Bid - slippage
 
                 # Convert Risk to Lots
                 if 'JPY' in sym:
@@ -342,10 +457,18 @@ def backtest_godmode_strategy(
                 # Min size
                 if size < 0.01: continue
 
+                # Recalculate SL/TP from adjusted entry price
+                if entry_signal == 'BUY':
+                    sl_price = entry_price - sl_dist
+                    tp_price = entry_price + tp_dist
+                else: # SELL
+                    sl_price = entry_price + sl_dist
+                    tp_price = entry_price - tp_dist
+
                 # Open Position
                 positions[sym] = {
                     'side': entry_signal,
-                    'entry_price': current_price,
+                    'entry_price': entry_price,  # Uses adjusted price with spread
                     'size': size,
                     'sl': sl_price,
                     'tp': tp_price,
@@ -356,7 +479,20 @@ def backtest_godmode_strategy(
                     'trail_mult': trail_mult
                 }
 
-    # Results
+    # Print Results
+    logger.info("\n" + "=" * 80)
+    logger.info("MONTHLY PERFORMANCE")
+    logger.info("=" * 80)
+
+    # Add final month
+    if current_month:
+        monthly_balances[current_month] = balance
+
+    for month in sorted(monthly_balances.keys()):
+        bal = monthly_balances[month]
+        monthly_return = ((bal - initial_balance) / initial_balance) * 100
+        logger.info(f"{month}: €{bal:,.2f} ({monthly_return:+.1f}%)")
+
     logger.info("\n" + "=" * 80)
     logger.info("RESULTS")
     logger.info("=" * 80)
