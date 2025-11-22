@@ -171,6 +171,26 @@ class LiveTradingBot:
             # Minimal heartbeat
             pass
 
+    def is_market_open(self):
+        """Check if Forex market is open (Sunday 22:00 UTC to Friday 22:00 UTC)"""
+        now = datetime.utcnow()
+        weekday = now.weekday() # Mon=0, Sun=6
+        hour = now.hour
+
+        # Saturday (5) - Closed
+        if weekday == 5:
+            return False
+
+        # Friday (4) - Close at 22:00 UTC
+        if weekday == 4 and hour >= 22:
+            return False
+
+        # Sunday (6) - Open at 22:00 UTC
+        if weekday == 6 and hour < 22:
+            return False
+
+        return True
+
     def load_historical_data(self):
         """Load historical H4 data from CSVs to initialize buffers"""
         logger.info("Loading historical data...")
@@ -912,6 +932,12 @@ class LiveTradingBot:
                             await connection.get_account_information()
                             last_heartbeat = datetime.utcnow()
                             logger.debug("Connection heartbeat OK")
+
+                        # Check Market Hours (Forex Closed Wknds)
+                        if not self.is_market_open():
+                            logger.info("💤 Market Closed (Weekend). Sleeping for 1 hour...")
+                            await asyncio.sleep(3600)
+                            continue
 
                         # Check for signals (every minute)
                         await self.check_signals(connection)
